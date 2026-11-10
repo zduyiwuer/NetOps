@@ -1,0 +1,44 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+
+# ---- Node ----
+node_modules/
+frontend/dist/
+npm-debug.log*
+yarn-error.log*
+
+# ---- 数据与产物（运行时生成）----
+backend/data/
+backend/netops.db
+backend/netops.db-wal
+backend/netops.db-shm
+data/
+*.log
+
+# ---- 环境与密钥 ----
+.env
+.env.local
+*.pem
+*.key
+secrets/
+
+# ---- IDE ----
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# ---- 文档产物 ----
+docs/screenshots/
+*.pdf
+
+# ---- Git ----
+.git/
+.gitignore
+.github/

@@ -1,0 +1,226 @@
+// gNMI (gRPC Network Management Interface) 协议定义
+//
+// 字段号与官方 openconfig/gnmi 规范保持一致，因此可以直接与
+// Cisco IOS-XR / H3C Comware / Huawei VRP 等真实设备的 gNMI 服务对接。
+//
+// 由 scripts/gen_proto.py 生成 *_pb2.py / *_pb2_grpc.py。
+
+syntax = "proto3";
+
+package gnmi;
+
+import "google/protobuf/any.proto";
+
+// ---------------------------------------------------------------- 路径
+message Path {
+  string element = 1;
+  repeated string key = 2;
+  string origin = 3;
+}
+
+// ---------------------------------------------------------------- 值
+message Decimal64 {
+  int64 digits = 1;
+  uint32 precision = 2;
+}
+
+message ScalarArray {
+  repeated TypedValue element = 1;
+}
+
+message TypedValue {
+  oneof value {
+    string string_val = 1;
+    int64 int_val = 2;
+    uint64 uint_val = 3;
+    bool bool_val = 4;
+    bytes bytes_val = 5;
+    Decimal64 decimal_val = 6;
+    ScalarArray leaflist_val = 7;
+    google.protobuf.Any any_val = 8;
+    bytes json_val = 9;
+    bytes json_ietf_val = 10;
+    string ascii_val = 11;
+    bytes proto_bytes = 12;
+  }
+}
+
+// ---------------------------------------------------------------- 通知
+message Update {
+  Path path = 1;
+  TypedValue val = 2;
+  uint32 duplicates = 3;
+}
+
+message Notification {
+  int64 timestamp = 1;
+  repeated Path prefix = 2;
+  repeated Update update = 3;
+  bool delete = 4;
+  bool atomic = 5;
+}
+
+message Error {
+  uint32 code = 1;
+  string message = 2;
+  repeated Error detail = 3;
+}
+
+// ---------------------------------------------------------------- 订阅
+enum SubscriptionMode {
+  STREAM = 0;
+  ON_CHANGE = 1;
+  SAMPLE = 2;
+  TARGET_DEFINED = 3;
+}
+
+message QOSMarking {
+  uint32 marking = 1;
+}
+
+message Extension {
+  oneof ext {
+    bytes registered_ext = 1;
+    bytes unregistered_ext = 2;
+  }
+}
+
+message ModelData {
+  string name = 1;
+  string organization = 2;
+  string version = 3;
+}
+
+message Subscription {
+  Path path = 1;
+  SubscriptionMode mode = 2;
+  uint64 sample_interval = 3;
+  bool suppress_redundant = 4;
+  repeated uint64 heartbeat_interval = 5;
+  repeated Extension extension = 6;
+}
+
+message SubscriptionList {
+  Path prefix = 1;
+  repeated Subscription subscription = 2;
+  bool request_updates = 3;
+  QOSMarking qos = 4;
+  repeated Extension extension = 5;
+  bool allow_aggregation = 6;
+  bool use_models = 7;
+  repeated ModelData use_models_2 = 8;
+}
+
+message SubscriptionRequest {
+  Path prefix = 1;
+  SubscriptionList subscription = 2;
+  bool use_alias = 3;
+  QOSMarking qos = 4;
+  repeated Extension extension = 5;
+  bool allow_aggregation = 6;
+  bool use_models = 7;
+  repeated ModelData use_models_2 = 8;
+}
+
+message SubscriptionResponse {
+  Path prefix = 1;
+  Notification notification = 2;
+  Error error = 3;
+  Update update = 4;
+  bool sync_response = 5;
+  repeated ModelData models = 6;
+  repeated Extension extension = 7;
+}
+
+message PollRequest {
+  bool single = 1;
+  bool use_alias = 2;
+  repeated Extension extension = 3;
+}
+
+message Alias {
+  Path path = 1;
+  string alias = 2;
+}
+
+message AliasList {
+  repeated Alias alias = 1;
+}
+
+message SubscribeRequest {
+  oneof request {
+    SubscriptionRequest subscribe = 1;
+    PollRequest poll = 2;
+  }
+  AliasList aliases = 3;
+  Extension extension = 4;
+  bool use_alias = 5;
+}
+
+// Subscribe 双向流的响应：设备推送遥测时使用
+message SubscribeResponse {
+  oneof response {
+    SubscriptionResponse update = 1;
+    SyncResponse sync_response = 2;
+    Error error = 3;
+  }
+}
+
+message SyncResponse {
+  bool sync_response = 1;
+}
+
+// ---------------------------------------------------------------- Get/Set
+enum DataType {
+  ALL = 0;
+  CONFIG = 1;
+  STATE = 2;
+  OPERATIONAL = 3;
+}
+
+message GetRequest {
+  Path prefix = 1;
+  repeated Path path = 2;
+  DataType type = 3;
+  bytes encoding = 4;
+  repeated Extension extension = 5;
+  bool use_models = 6;
+  repeated ModelData use_models_2 = 7;
+}
+
+message GetResponse {
+  repeated Notification notification = 1;
+  Error error = 2;
+  repeated ModelData models = 3;
+  repeated Extension extension = 4;
+}
+
+message SetRequest {
+  Path prefix = 1;
+  repeated Path path = 2;
+  bytes payload = 3;
+  DataType type = 4;
+  repeated Extension extension = 5;
+}
+
+message SetResponse {
+  Path prefix = 1;
+  repeated Path path = 2;
+  Error error = 3;
+}
+
+message CapabilityRequest {
+  repeated Extension extension = 1;
+}
+
+message CapabilityResponse {
+  repeated ModelData supported_models = 1;
+  repeated Extension extension = 2;
+}
+
+// ---------------------------------------------------------------- 服务
+service gNMI {
+  rpc Subscribe(stream SubscribeRequest) returns (stream SubscribeResponse);
+  rpc Get(GetRequest) returns (GetResponse);
+  rpc Set(SetRequest) returns (SetResponse);
+}

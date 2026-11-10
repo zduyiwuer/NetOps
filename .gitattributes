@@ -1,0 +1,40 @@
+# ============================================================
+# 统一换行符：容器内为 Linux，脚本与配置必须保持 LF，
+# 否则 Docker 构建时会出现「未找到解释器」等诡异问题。
+# ============================================================
+
+* text=auto eol=lf
+
+# 明确按文本处理的文件
+*.py       text eol=lf
+*.js       text eol=lf
+*.vue      text eol=lf
+*.css      text eol=lf
+*.html     text eol=lf
+*.json     text eol=lf
+*.yml      text eol=lf
+*.yaml     text eol=lf
+*.md       text eol=lf
+*.txt      text eol=lf
+*.proto    text eol=lf
+*.sh       text eol=lf
+*.bat      text eol=lf crlf
+Dockerfile text eol=lf
+.gitignore text eol=lf
+.dockerignore text eol=lf
+
+# 二进制文件不做换行转换
+*.png      binary
+*.jpg      binary
+*.jpeg     binary
+*.gif      binary
+*.ico      binary
+*.pdf      binary
+*.zip      binary
+*.gz       binary
+*.db       binary
+*.db-wal   binary
+*.db-shm   binary
+*.woff     binary
+*.woff2    binary
+*.ttf      binary

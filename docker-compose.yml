@@ -1,0 +1,111 @@
+# ============================================================
+# NetOps 网络设备监控平台 —— Docker Compose 部署
+#
+# 快速启动：
+#   docker compose up -d
+#   访问 http://<服务器IP>:8900
+#
+# 默认账号：admin / admin123（请登录后立即修改）
+# ============================================================
+
+services:
+  netops:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: netops:latest
+    container_name: netops
+    restart: unless-stopped
+
+    ports:
+      # Web 管理界面 + 后端 API
+      - "8900:8900"
+      # Syslog 接收（设备侧日志上报）
+      - "5514:5514/udp"
+      # NetFlow v9 / IPFIX / NetFlow v5 接收
+      - "2055:2055/udp"
+      - "4739:4739/udp"
+      - "9995:9995/udp"
+      # gNMI Telemetry Collector
+      - "57400:57400"
+
+    environment:
+      TZ: Asia/Shanghai
+
+      # 数据库：默认 SQLite（数据落在数据卷中）
+      # 切换 PostgreSQL 示例：
+      # NETOPS_DATABASE_URL: postgresql+psycopg://netops:pass@db:5432/netops
+      NETOPS_DATABASE_URL: sqlite:////app/data/netops.db
+
+      # 安全：生产环境务必替换为强随机值（≥32 字符）
+      NETOPS_SECRET_KEY: ${NETOPS_SECRET_KEY:-change-me-to-a-strong-random-string-at-least-32-chars}
+
+      # 采集通道开关
+      NETOPS_SCHEDULER_ENABLED: "true"
+      NETOPS_TELEMETRY_ENABLED: "true"
+      NETOPS_NETFLOW_ENABLED: "true"
+      NETOPS_SYSLOG_ENABLED: "true"
+      NETOPS_GNMI_LISTEN_PORT: "57400"
+
+      # 数据保留策略
+      NETOPS_METRIC_RETENTION_DAYS: "30"
+      NETOPS_LOG_RETENTION_DAYS: "60"
+      NETOPS_NETFLOW_RETENTION_DAYS: "7"
+
+      # 并发采集上限
+      NETOPS_MAX_CONCURRENT_POLL: "20"
+
+    volumes:
+      # 数据库、配置备份、巡检报告、导入导出文件
+      - netops-data:/app/data
+
+      # 可选：挂载自定义配置（覆盖镜像内的 .env.example）
+      # - ./backend/.env:/app/.env:ro
+
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8900/api/health',timeout=4).status==200 else 1)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+    # 采集设备需要访问内网 SNMP/SSH，按需放开
+    # extra_hosts:
+    #   - "device.local:192.168.1.10"
+
+  # ---------------------------------------------------------------
+  # 可选：PostgreSQL 替代 SQLite（适合设备规模较大、写入频繁的场景）
+  # 启用方式：docker compose --profile postgres up -d
+  # ---------------------------------------------------------------
+  db:
+    image: postgres:16-alpine
+    container_name: netops-db
+    restart: unless-stopped
+    profiles: ["postgres"]
+    environment:
+      POSTGRES_DB: netops
+      POSTGRES_USER: netops
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-netops}
+    volumes:
+      - netops-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U netops -d netops"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  netops-data:
+    name: netops-data
+  netops-db:
+    name: netops-db

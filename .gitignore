@@ -1,0 +1,41 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ---- Node ----
+node_modules/
+frontend/dist/
+npm-debug.log*
+yarn-error.log*
+
+# ---- 运行时数据（数据库、备份、报告、导入导出）----
+backend/data/
+backend/netops.db
+backend/netops.db-wal
+backend/netops.db-shm
+data/
+*.log
+
+# ---- 环境与密钥（严禁提交）----
+.env
+.env.local
+*.pem
+*.key
+secrets/
+
+# ---- IDE ----
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# ---- 系统 ----
+Thumbs.db
+desktop.ini
