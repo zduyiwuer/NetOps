@@ -812,6 +812,57 @@ docker run -d --name netops \
 
 ---
 
+## 十之二、代码获取与 GitHub
+
+### 克隆与部署
+
+```bash
+git clone <仓库地址>
+cd netops
+docker compose up -d --build
+```
+
+### 一键推送到 GitHub
+
+仓库内置推送脚本，会自动创建远程仓库、推送 `main` 分支并打 `v1.0.0` 标签：
+
+```bash
+# 方式一：使用 Personal Access Token（推荐）
+#   在 https://github.com/settings/tokens 生成，勾选 repo 权限
+export GITHUB_TOKEN=ghp_你的token
+./push_github.sh                      # 交互式
+./push_github.sh my-netops            # 指定仓库名
+./push_github.sh my-netops private    # 指定仓库名与可见性
+
+# 方式二：已配置 SSH key 时无需 token
+./push_github.sh my-netops
+```
+
+### 项目结构
+
+```
+netops/
+├── backend/              FastAPI 后端
+│   ├── app/
+│   │   ├── api/          REST 接口层
+│   │   ├── collectors/   采集层（SNMP / SSH / NetFlow / gNMI / 拓扑）
+│   │   ├── core/         配置、安全、凭据加密
+│   │   ├── models/       数据模型
+│   │   ├── proto/        gNMI protobuf 定义
+│   │   └── services/     业务服务层
+│   ├── scripts/          12 套自动化验证脚本
+│   └── requirements.txt
+├── frontend/             Vue 3 + Element Plus + ECharts
+│   └── src/views/        18 个功能页面
+├── docs/screenshots/     界面截图
+├── Dockerfile            三阶段构建
+├── docker-compose.yml    编排配置
+├── start.sh / start.bat  源码方式一键启动
+└── push_github.sh        一键推送 GitHub
+```
+
+---
+
 ## 十一、生产部署建议
 
 1. **修改默认密码**并设置强随机 `NETOPS_SECRET_KEY`（一旦设置不可更改，否则已加密的凭据无法解密）。
