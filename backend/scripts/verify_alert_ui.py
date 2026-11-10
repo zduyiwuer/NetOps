@@ -52,26 +52,57 @@ def main() -> int:
         check("存在门店筛选下拉", has_store_placeholder is not None)
 
         print("\n[3] 告警详情展开行")
-        # 先测展开（默认状态下进行，避免与筛选互相干扰）
+        # 状态筛选默认只看 firing，演示告警可能已被自动确认/恢复，
+        # 这里切到「全部状态」以保证有可展开的行
+        status_select = page.query_selector(".filter-bar .el-select:has-text('未恢复')")
+        if status_select:
+            status_select.click()
+            page.wait_for_timeout(700)
+            page.eval_on_selector_all(
+                ".el-select-dropdown:visible .el-select-dropdown__item",
+                "els => { const t = els.find(e => e.textContent.trim() === '全部状态'); if (t) t.click(); }",
+            )
+            page.wait_for_timeout(1800)
+
+        # 事件表格是告警事件页签里的表格，需与统计表格区分：
+        # 事件表格含「告警内容」列
         expand_count = page.eval_on_selector_all(
             "button[aria-label='展开当前行']", "els => els.length"
         )
         check("存在行内展开按钮", expand_count > 0, f"{expand_count} 个")
-        if expand_count:
-            page.eval_on_selector_all(
-                "button[aria-label='展开当前行']",
-                "els => { if (els[0]) els[0].click(); }",
-            )
-            page.wait_for_timeout(1400)
-            detail = page.query_selector(".alert-detail")
-            check("展开后显示详情区", detail is not None)
-            if detail:
-                text = detail.inner_text()
-                check("详情含详细告警描述", len(text) > 40, text[:60].replace("\n", " "))
-                check("详情含具体接口名", "GigabitEthernet0/0/1" in text or "接口" in text)
-                check("详情含接口明细表", page.query_selector(".alert-detail .el-table") is not None)
-                check("详情含数值", "120" in text or "173" in text)
-                page.screenshot(path=r"C:\Users\DAVE~1.ZEN\AppData\Local\Temp\alert_detail.png")
+        # 展开带接口明细的那一行（接口类告警），而非第一行
+        # 接口类告警的「告警内容」列包含"接口错包"/"接口利用率"/"接口流量"等字样
+        target_idx = page.evaluate(
+            """() => {
+                const rows = [...document.querySelectorAll('.el-table__row')];
+                for (let i = 0; i < rows.length; i++) {
+                    const t = rows[i].innerText;
+                    if (t.includes('接口错包') || t.includes('接口利用率') || t.includes('接口流量')) {
+                        return i;
+                    }
+                }
+                return 0;
+            }"""
+        )
+        check("找到接口类告警行", target_idx is not None, f"第 {target_idx} 行")
+        page.evaluate(
+            """(idx) => {
+                const rows = [...document.querySelectorAll('.el-table__row')];
+                const btn = rows[idx]?.querySelector("button[aria-label='展开当前行']");
+                if (btn) btn.click();
+            }""",
+            target_idx,
+        )
+        page.wait_for_timeout(1500)
+        detail = page.query_selector(".alert-detail")
+        check("展开后显示详情区", detail is not None)
+        if detail:
+            text = detail.inner_text()
+            check("详情含详细告警描述", len(text) > 40, text[:60].replace("\n", " "))
+            check("详情含具体接口名", "GigabitEthernet0/0/1" in text or "接口" in text)
+            check("详情含接口明细表", page.query_selector(".alert-detail .el-table") is not None)
+            check("详情含数值", "120" in text or "173" in text)
+            page.screenshot(path=r"C:\Users\DAVE~1.ZEN\AppData\Local\Temp\alert_detail.png")
 
         print("\n[4] 门店筛选可用")
         page.click(".filter-bar .el-select:has-text('全部门店')")

@@ -42,6 +42,7 @@
               <el-option v-for="s in stores" :key="s.id" :label="s.name" :value="s.id" />
             </el-select>
             <el-select v-model="query.status" placeholder="全部状态" clearable style="width: 130px" @change="load">
+              <el-option label="全部状态" value="" />
               <el-option label="未恢复" value="firing" />
               <el-option label="已确认" value="acked" />
               <el-option label="已恢复" value="resolved" />
