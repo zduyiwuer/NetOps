@@ -61,12 +61,36 @@ async def run_backup(
             db.commit()
             return False
 
+        # 按厂商规范化配置内容（飞塔输出为标准 .conf）
+        from app.collectors.vendors import resolve_vendor
+        from app.services.config_formatter import (
+            backup_filename,
+            format_config,
+            validate_fortinet_config,
+        )
+
+        vendor = resolve_vendor(device.vendor)
+        content = format_config(
+            vendor_key=vendor.key,
+            raw=content,
+            device_name=device.name,
+            device_ip=device.ip,
+            source_commands=list(vendor.backup_cmd),
+        )
+
+        # 飞塔配置做完整性校验，发现截断时记录告警
+        warn = ""
+        if vendor.key == "fortinet":
+            check = validate_fortinet_config(content)
+            if not check["valid"]:
+                warn = "；配置完整性校验未通过：" + "、".join(check["issues"])
+
         now = datetime.now()
-        filename = f"{_safe_name(device.name)}_{device.ip}_{now.strftime('%Y%m%d_%H%M%S')}.cfg"
+        filename = backup_filename(vendor.key, device.name, device.ip, now)
         device_dir = os.path.join(settings.backup_dir, str(device.id))
         os.makedirs(device_dir, exist_ok=True)
         file_path = os.path.join(device_dir, filename)
-        with open(file_path, "w", encoding="utf-8") as fh:
+        with open(file_path, "w", encoding="utf-8", newline="\n") as fh:
             fh.write(content)
 
         raw = content.encode("utf-8")
@@ -79,7 +103,7 @@ async def run_backup(
             method="ssh",
             trigger_type=trigger_type,
             status="success",
-            message="",
+            message=warn,
             operator=operator,
         )
         db.add(record)

@@ -329,6 +329,8 @@ NETOPS_LDAP_GROUP_ROLE_MAP={"CN=NetOps-Admins,OU=Groups,DC=corp,DC=local":"admin
 | 飞塔 FortiGate | `diagnose firewall config-file save - flash` + `show full-configuration` | 先存诊断快照便于回滚，再导出可读配置 |
 
 > 飞塔的诊断保存命令只返回状态回显、不含配置内容，平台已自动识别并只保留真正的配置文本。
+> 备份文件的**扩展名与内容格式按厂商区分**（飞塔输出标准 `.conf`，其余厂商输出 `.cfg`），
+> 详见「[九之十、配置备份输出格式](#九之十配置备份输出格式飞塔-conf)」。
 
 **设备侧配置示例**
 
@@ -487,6 +489,9 @@ python -m scripts.verify_alert_detail  # 36 项：接口级告警明细、指标
 
 # 11. 告警中心前端验证
 python -m scripts.verify_alert_ui      # 12 项：门店筛选控件、联动、详情展开行、接口明细表
+
+# 12. 飞塔配置转换验证（.conf 输出）
+python -m scripts.verify_fortinet_config  # 43 项：噪声剥离、结构解析、元信息头、截断检出、扩展名区分
 ```
 
 > 容器内运行验证脚本时，需先启动服务并把 `BASE` 指向容器地址。
@@ -673,6 +678,80 @@ aaa authorization exec default group tacacs+ local
 
 配置持久化在数据库，服务重启后自动应用；所有变更写入操作日志。
 页面同时展示每个任务的下次执行时间、上次执行时间与执行结果（成功/失败）。
+
+---
+
+## 九之十、配置备份输出格式（飞塔 .conf）
+
+备份时不再把 SSH 原始回显直接存盘，而是先经**按厂商的格式化器**整理，
+再写入备份目录。文件扩展名也按厂商区分：
+
+| 厂商 | 输出扩展名 | 处理方式 |
+| --- | --- | --- |
+| 飞塔 FortiGate | **`.conf`** | 完整转换：剥离噪声 → 规范化缩进 → 补元信息头 → 完整性校验 |
+| Cisco IOS/NXOS / ASA / WLC | `.cfg` | 剥离噪声 + 补元信息头，正文原样保留 |
+| 华为 VRP / H3C | `.cfg` | 同上 |
+| MikroTik RouterOS | `.cfg` | 同上 |
+
+### 飞塔 `.conf` 长什么样
+
+```
+# ============================================================
+# FortiGate 配置备份（FortiOS configuration）
+# 设备名称 : FGT-60F
+# 管理地址 : 10.10.3.1
+# 采集时间 : 2026-11-10 15:22:52
+# 来源命令 : diagnose firewall config-file save - flash / show full-configuration
+# 配置块数 : 4
+# ============================================================
+
+config system global
+    set hostname "FGT-60F"
+    set timezone 04
+    set admin-sport 8443
+end
+config system interface
+    edit "port1"
+        set vdom "root"
+        set ip 10.10.3.1 255.255.255.0
+        set allowaccess ping https ssh
+    next
+end
+...
+```
+
+### 转换做了四件事
+
+1. **剥离 CLI 噪声**：命令回显（`FGT # show full-configuration`）、提示符（`FGT #` /
+   `FGT(config) #`）、诊断状态行（`Diagnostics : running` / `config-file saved`）、
+   采集器分段标记（`# ===== show full-configuration =====`）、分隔线与空行。
+2. **规范化结构**：顶层 `config` 行不缩进，层级按 FortiOS 的 **4 空格**制对齐，
+   `edit` / `set` / `next` 关系保留，可直接被 FortiOS 解析或做版本对比。
+3. **补元信息头**：设备名称、管理地址、采集时间、来源命令、配置块数，
+   便于审计追溯与多份备份对照。
+4. **完整性校验**：统计 `config` 块与 `end` 的配对、`edit` 条目数、`set` 命令数。
+
+### 截断配置不会被"补全"
+
+如果采集过程中连接中断导致配置**不完整**（有 `config` 块但缺少配对的 `end`），
+平台**不会自动补 `end`** —— 补齐后会得到一份「看起来完整、实际缺配置」的危险文件，
+一旦被误用于回灌就会造成设备配置丢失。处理方式是：
+
+- 保持原始内容不动；
+- 在文件头写入 `# [警告] 检测到 N 个配置块未闭合，配置可能被截断，请核查采集完整性`；
+- 备份记录（message 字段）标注校验未通过的原因。
+
+校验不通过的备份仍会落盘，便于人工复核，而不是被静默丢弃。
+
+### 自行转换
+
+```bash
+# 后端目录下执行，会打印转换后的 .conf 内容
+python -u -m scripts.verify_fortinet_config
+```
+
+该脚本包含 **43 项断言**，覆盖噪声剥离、结构解析、元信息头、内容保真度、
+截断检出、扩展名区分与落盘命名。
 
 ---
 

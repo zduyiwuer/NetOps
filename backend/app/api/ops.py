@@ -165,7 +165,9 @@ def download_store_backups(
     import io
     import zipfile
 
+    from app.collectors.vendors import resolve_vendor
     from app.models.models import Device, Store
+    from app.services.config_formatter import config_extension
 
     store = db.get(Store, store_id)
     if store is None:
@@ -195,7 +197,9 @@ def download_store_backups(
                     content = fh.read()
             except OSError:
                 continue
-            safe_name = f"{device.name}_{device.ip}.cfg".replace("/", "_")
+            safe_name = (
+                f"{device.name}_{device.ip}{config_extension(resolve_vendor(device.vendor).key)}"
+            ).replace("/", "_")
             zf.writestr(f"{store.name}/{safe_name}", content)
             written += 1
         # 附带清单

@@ -100,6 +100,7 @@ class SshClient:
 
         多数厂商首条命令即可取到完整配置；
         飞塔需要多条命令组合（诊断保存命令不输出配置内容，需另取）。
+        返回的原始文本会按厂商做格式化（见 config_formatter）。
         """
         results = await self.run_commands(self.vendor.backup_cmd or ["show running-config"])
         parts: List[str] = []
@@ -114,6 +115,25 @@ class SshClient:
                 continue
             parts.append(f"# ===== {cmd} =====\n{stripped}")
         return "\n\n".join(parts)
+
+    async def backup_config_formatted(
+        self,
+        device_name: str = "",
+        device_ip: str = "",
+    ) -> str:
+        """抓取并格式化运行配置（按厂商输出规范配置文件）。"""
+        from app.services.config_formatter import format_config
+
+        raw = await self.backup_config()
+        if not raw:
+            return ""
+        return format_config(
+            vendor_key=self.vendor.key,
+            raw=raw,
+            device_name=device_name or self.host,
+            device_ip=device_ip or self.host,
+            source_commands=list(self.vendor.backup_cmd),
+        )
 
     async def fetch_logs(self, limit: int = 200) -> List[Tuple[str, str]]:
         """抓取设备日志，返回 [(级别, 文本)]。"""
