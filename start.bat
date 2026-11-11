@@ -132,25 +132,21 @@ if exist "%LOGFILE%" (
   )
 )
 
-REM 用 Python 以 Windows 原生分离标志启动脱离控制台的进程：
-REM   DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW | CREATE_BREAKAWAY_FROM_JOB
-REM 这样父窗口 / 终端关闭后服务仍继续运行。
+REM 一步完成：启动后台进程 + 反查真实 PID + 写 PID 文件。
+REM 全部在 Python 内部完成，避开 bat 层的变量展开与编码坑。
 set "NEWPID="
-for /f "usebackq delims=" %%P in (`python -m scripts.service_helper spawn "%LOGFILE%" "%BACKEND%" python -m uvicorn app.main:app --host %HOST% --port %PORT% 2^>nul`) do set "NEWPID=%%P"
+for /f "usebackq delims=" %%P in (`python -m scripts.service_helper start-service "%LOGFILE%" "%BACKEND%" "%PIDFILE%" %PORT% python -m uvicorn app.main:app --host %HOST% --port %PORT% 2^>nul`) do set "NEWPID=%%P"
 
 if not defined NEWPID (
   echo 启动失败：无法创建后台进程，请检查日志：%LOGFILE%
   popd
-goto :finish
+  goto :finish
 )
-REM PID 文件由 helper 统一用 LF 换行写入
-REM （bat 的 for /f 读 CRLF 会把 \r 带进变量，导致 taskkill 拿到错误 PID）
-python -m scripts.service_helper write-pid "%PIDFILE%" %NEWPID%
 REM ---------------------------------------------------- 健康检查等待就绪
 echo ==^> 等待服务就绪
 for /L %%I in (1,1,60) do (
   REM 必须「进程存活」且「端口可连」才算就绪，避免只查端口导致假成功
-  python -m scripts.service_helper healthy %NEWPID% %PORT% >nul 2>nul
+  python -m scripts.service_helper healthy !NEWPID! %PORT% >nul 2>nul
   if not errorlevel 1 goto ready
   echo | set /p "=."
   timeout /t 1 /nobreak >nul
@@ -159,7 +155,7 @@ goto not_ready
 
 :ready
 echo.
-echo     启动成功（PID %NEWPID%）
+echo     启动成功（PID !NEWPID!）
 echo     访问地址 : http://localhost:%PORT%
 echo     运行日志 : %LOGFILE%
 echo     停止服务 : stop.bat

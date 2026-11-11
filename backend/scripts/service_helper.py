@@ -175,49 +175,115 @@ def _process_cmdline_safe(pid: int) -> str:
 def spawn_detached(cmd: list[str], cwd: str, log_file: str) -> int:
     """启动一个脱离终端的后台进程，返回 PID。
 
-    Windows 使用 DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW，
-    让进程不依附当前控制台，父 shell 退出后仍继续运行；
+    Windows 优先用 **WMI Win32_Process.Create**：
+    进程由 WMI 服务创建，完全脱离调用方的进程树与会话，
+    父进程退出后依然存活——这是最可靠的「后台常驻」方式。
+    失败时回退到 DETACHED_PROCESS 分离标志。
+
     Linux / macOS 使用 start_new_session=True 创建新会话。
     """
-    out = open(log_file, "ab", buffering=0)
     if os.name == "nt":
-        flags = 0
-        flags |= 0x00000008  # DETACHED_PROCESS
-        flags |= 0x00000200  # CREATE_NEW_PROCESS_GROUP
-        flags |= 0x08000000  # CREATE_NO_WINDOW
-        # CREATE_BREAKAWAY_FROM_JOB：允许进程脱离父进程的作业对象，
-        # 这样即便启动方（如 IDE / CI / 终端）被整体清理，服务仍存活。
-        # 作业对象不允许 breakaway 时该标志会被忽略，不影响启动。
-        flags |= 0x01000000
-        try:
-            proc = subprocess.Popen(
-                cmd,
-                cwd=cwd,
-                stdin=subprocess.DEVNULL,
-                stdout=out,
-                stderr=subprocess.STDOUT,
-                creationflags=flags,
-                close_fds=True,
-            )
-        except OSError:
-            # breakaway 不被允许时回退到不带该标志的启动方式
-            proc = subprocess.Popen(
-                cmd,
-                cwd=cwd,
-                stdin=subprocess.DEVNULL,
-                stdout=out,
-                stderr=subprocess.STDOUT,
-                creationflags=flags & ~0x01000000,
-                close_fds=True,
-            )
-    else:
+        pid = _spawn_via_wmi(cmd, cwd, log_file)
+        if pid:
+            return pid
+        return _spawn_via_detach_flags(cmd, cwd, log_file)
+
+    out = open(log_file, "ab", buffering=0)
+    proc = subprocess.Popen(
+        cmd,
+        cwd=cwd,
+        stdin=subprocess.DEVNULL,
+        stdout=out,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+        close_fds=True,
+    )
+    return proc.pid
+
+
+def _spawn_via_wmi(cmd: list[str], cwd: str, log_file: str) -> int:
+    """通过 WMI Win32_Process.Create 启动进程，返回 PID（失败返回 0）。
+
+    WMI 由系统服务托管，创建的进程不属于调用方的作业对象/会话，
+    因此父进程（终端、脚本、工具）退出都不会带走它。
+
+    注意：WMI 启动的进程环境是**系统 PATH**，可能与当前解释器不同
+    （例如当前用的是虚拟环境里的 python，WMI 却找到系统 python）。
+    因此这里把解释器换成当前正在运行的这个绝对路径，
+    并让 cmd 以 UTF-8 代码页运行，避免中文日志乱码。
+    """
+    try:
+        # 解释器换成绝对路径，确保用的是当前这个（依赖已装好的）
+        parts = list(cmd)
+        if parts and os.path.basename(parts[0]).lower().startswith("python"):
+            parts[0] = sys.executable
+
+        inner = " ".join(_quote_win(part) for part in parts)
+        command_line = (
+            f'cmd /c "chcp 65001 >nul && cd /d {_quote_win(cwd)} && {inner} '
+            f'>> {_quote_win(log_file)} 2>&1"'
+        )
+        ps = (
+            "Invoke-CimMethod -ClassName Win32_Process -MethodName Create "
+            f"-Arguments @{{CommandLine='{_escape_ps(command_line)}'}} "
+            "| Select-Object -ExpandProperty ProcessId"
+        )
+        r = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
+            capture_output=True, timeout=60,
+        )
+        out = (r.stdout or b"").decode("utf-8", errors="replace").strip()
+        for line in out.splitlines():
+            line = line.strip()
+            if line.isdigit():
+                return int(line)
+        return 0
+    except Exception:
+        return 0
+
+
+def _escape_ps(text: str) -> str:
+    """转义 PowerShell 单引号字符串里的单引号。"""
+    return text.replace("'", "''")
+
+
+def _quote_win(path: str) -> str:
+    """Windows 命令行路径加引号（含空格时必需）。"""
+    if not path:
+        return '""'
+    if " " in path or "\t" in path:
+        return f'"{path}"'
+    return path
+
+
+def _spawn_via_detach_flags(cmd: list[str], cwd: str, log_file: str) -> int:
+    """用 DETACHED_PROCESS 等分离标志启动进程（备用方案）。"""
+    out = open(log_file, "ab", buffering=0)
+    flags = 0
+    flags |= 0x00000008  # DETACHED_PROCESS
+    flags |= 0x00000200  # CREATE_NEW_PROCESS_GROUP
+    flags |= 0x08000000  # CREATE_NO_WINDOW
+    # CREATE_BREAKAWAY_FROM_JOB：允许进程脱离父进程的作业对象
+    flags |= 0x01000000
+    try:
         proc = subprocess.Popen(
             cmd,
             cwd=cwd,
             stdin=subprocess.DEVNULL,
             stdout=out,
             stderr=subprocess.STDOUT,
-            start_new_session=True,
+            creationflags=flags,
+            close_fds=True,
+        )
+    except OSError:
+        # breakaway 不被允许时回退到不带该标志的启动方式
+        proc = subprocess.Popen(
+            cmd,
+            cwd=cwd,
+            stdin=subprocess.DEVNULL,
+            stdout=out,
+            stderr=subprocess.STDOUT,
+            creationflags=flags & ~0x01000000,
             close_fds=True,
         )
     return proc.pid
@@ -302,10 +368,16 @@ def write_pid_file(path: str, pid: int) -> None:
     统一用 LF 换行——Windows 的 bat 用 ``for /f`` 读取时，
     若文件是 CRLF 会把尾部的 ``\\r`` 一并读进变量，
     导致 taskkill 拿到错误 PID。
+
+    同时清洗入参：bat 的 ``for /f`` 捕获的输出可能残留 ``\\r``，
+    直接写进 PID 文件会导致后续读取出错。
     """
+    clean = str(pid).strip().replace("\r", "").replace("\n", "").strip()
+    if not clean.isdigit():
+        raise ValueError(f"非法 PID: {pid!r}")
     os.makedirs(os.path.dirname(os.path.abspath(path)) or ".", exist_ok=True)
     with open(path, "w", encoding="utf-8", newline="\n") as fh:
-        fh.write(str(pid))
+        fh.write(clean)
 
 
 def read_pid_file(path: str) -> int:
@@ -333,11 +405,166 @@ def service_healthy(pid: int, port: int) -> bool:
     return port_reachable(port)
 
 
+def candidate_service_pids(port: int) -> List[dict]:
+    """列出命令行含 ``--port <端口>`` 的 python 进程及其创建时间。
+
+    用 CIM（Win32_Process）一次性取全，带 CreationDate——
+    这样能准确区分「新启动的服务」与「上一轮遗留的进程」，
+    避免把死 PID 写进 PID 文件。
+    """
+    out: List[dict] = []
+    if os.name != "nt":
+        return out
+    ps = (
+        "Get-CimInstance -ClassName Win32_Process | "
+        "Where-Object { $_.Name -like 'python*' -and "
+        f"$_.CommandLine -like '*--port {port}*' }} | "
+        "ForEach-Object { Write-Output ($_.ProcessId.ToString() + '|' + "
+        "$_.CreationDate.ToString('o')) }"
+    )
+    try:
+        raw = _run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps], timeout=45)
+    except Exception:
+        return out
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line or "|" not in line:
+            continue
+        pid_s, _, ctime_s = line.partition("|")
+        pid_s = pid_s.strip()
+        if not pid_s.isdigit():
+            continue
+        # CreationDate 是 ISO 字符串，转成可比较的数值
+        try:
+            from datetime import datetime
+
+            ctime = datetime.fromisoformat(ctime_s.strip().replace("Z", "+00:00")).timestamp()
+        except Exception:
+            ctime = 0.0
+        out.append({"pid": int(pid_s), "ctime": ctime})
+    return out
+
+
+def listener_pid(port: int) -> int:
+    """找出真正**监听**指定端口的进程 PID（Windows）。
+
+    判定顺序：
+    1. **CIM 按命令行查**（``Get-CimInstance Win32_Process``）——
+       在部分环境下 netstat 的 LISTENING 行会报 PID=0
+       （WMI 创建的进程尤其如此），CIM 则能稳定拿到真实 PID；
+    2. netstat 作为备选。
+
+    多个候选时取**创建时间最新**的那个，避免认到上一轮遗留的进程。
+    返回的 PID 必须仍然存活，否则返回 0。
+    """
+    if os.name != "nt":
+        return 0
+
+    # 1) CIM 按命令行匹配（可靠），取最新的
+    cands = candidate_service_pids(port)
+    alive = [c for c in cands if pid_alive(c["pid"])]
+    if alive:
+        alive.sort(key=lambda c: c["ctime"])
+        return alive[-1]["pid"]
+
+    # 2) netstat 备选
+    try:
+        out = _run(["netstat", "-ano"], timeout=30)
+        for line in out.splitlines():
+            if "LISTENING" not in line.upper():
+                continue
+            parts = line.split()
+            if len(parts) < 5:
+                continue
+            local = parts[1]
+            if not local.rsplit(":", 1)[-1].isdigit():
+                continue
+            if int(local.rsplit(":", 1)[-1]) != port:
+                continue
+            pid = parts[-1]
+            if pid.isdigit() and int(pid) != 0 and pid_alive(int(pid)):
+                return int(pid)
+    except Exception:
+        pass
+    return 0
+
+
+def find_service_pid(port: int, timeout: float = 30.0, stable_rounds: int = 2) -> int:
+    """找出监听指定端口的 NetOps uvicorn 进程 PID。
+
+    判定顺序：
+    1. **端口监听者**（``listener_pid``）——最权威，端口的监听者就是服务本身；
+    2. 命令行匹配（``--port <端口>`` + uvicorn）作为兜底，
+       且要求候选**连续多轮都存在**——服务启动过程中会有临时进程闪现又退出，
+       只出现一次的不能认。
+
+    关键是**先等端口可连接**再判定：端口通了说明服务已就绪，
+    此时反查出来的 PID 才是真正在服务的那一个。
+    """
+    import time
+
+    deadline = time.time() + timeout
+    seen: dict[int, int] = {}  # pid -> 连续出现次数
+    best_pid = 0
+    best_time = -1
+
+    while time.time() < deadline:
+        # 端口还没通就继续等（服务尚未就绪，此时反查容易认到旧进程）
+        if not port_reachable(port):
+            time.sleep(0.5)
+            continue
+
+        # 1) 先看端口监听者
+        lp = listener_pid(port)
+        if lp and pid_alive(lp):
+            return lp
+
+        # 2) 命令行匹配兜底
+        try:
+            from scripts.winproc import list_python_pids, process_cmdline, process_create_time
+
+            needle = f"--port {port}"
+            current: dict[int, int] = {}
+            for pid in list_python_pids():
+                cmd = (process_cmdline(pid) or "").lower()
+                if "uvicorn" not in cmd or needle not in cmd:
+                    continue
+                current[pid] = process_create_time(pid)
+
+            for pid in list(seen):
+                if pid not in current:
+                    seen.pop(pid, None)
+            for pid in current:
+                seen[pid] = seen.get(pid, 0) + 1
+
+            for pid, count in seen.items():
+                if count < stable_rounds:
+                    continue
+                ctime = current.get(pid, 0)
+                # 读不到创建时间（0）时不要抢占已有更优候选
+                if ctime and ctime < best_time:
+                    continue
+                if ctime >= best_time:
+                    best_time = ctime
+                    best_pid = pid
+            if best_pid:
+                return best_pid
+        except Exception:
+            pass
+        time.sleep(0.5)
+    return best_pid
+
+
 def main() -> int:
     if len(sys.argv) < 2:
         print(__doc__)
         return 2
     cmd = sys.argv[1]
+
+    # bat 的 `for /f` 捕获的命令输出会残留 \r，
+    # 所有参数统一清洗一遍，避免 PID 之类的数值带上杂字符
+    argv = [a.strip().replace("\r", "").replace("\n", "") for a in sys.argv]
+
     # 无参数类子命令
     if cmd == "bash-path":
         path = find_bash()
@@ -345,12 +572,12 @@ def main() -> int:
             print(path)
             return 0
         return 1
-    if len(sys.argv) < 3:
+    if len(argv) < 3:
         print(__doc__)
         return 2
     try:
         if cmd == "find-pid":
-            port = int(sys.argv[2])
+            port = int(argv[2])
             # 先按监听端口找，再按命令行匹配兜底
             for pid in pids_by_port(port):
                 if is_netops_process(pid):
@@ -364,16 +591,16 @@ def main() -> int:
                     return 0
             return 1
         if cmd == "port-busy":
-            port = int(sys.argv[2])
+            port = int(argv[2])
             return 0 if port_busy(port) else 1
         if cmd == "reachable":
-            port = int(sys.argv[2])
+            port = int(argv[2])
             return 0 if port_reachable(port) else 1
         if cmd == "alive":
-            pid = int(sys.argv[2])
+            pid = int(argv[2])
             return 0 if pid_alive(pid) else 1
         if cmd == "is-netops":
-            pid = int(sys.argv[2])
+            pid = int(argv[2])
             return 0 if is_netops_process(pid) else 1
         if cmd == "bash-path":
             path = find_bash()
@@ -389,42 +616,78 @@ def main() -> int:
             return 1
         if cmd == "healthy":
             # healthy <pid> <port>
-            pid = int(sys.argv[2])
-            port = int(sys.argv[3])
+            pid = int(argv[2])
+            port = int(argv[3])
             return 0 if service_healthy(pid, port) else 1
+        if cmd == "start-service":
+            # start-service <log_file> <cwd> <pid_file> <port> <cmd...>
+            # 一步完成：启动后台进程 + 反查真实 PID + 写 PID 文件
+            # 全部在 Python 内部完成，避免 bat 层的变量展开/编码问题
+            log_file = argv[2]
+            cwd = argv[3]
+            pid_file = argv[4]
+            port = int(argv[5])
+            args = argv[6:]
+            if not args:
+                return 2
+            spawn_detached(args, cwd, log_file)
+            real_pid = find_service_pid(port, timeout=60)
+            if not real_pid:
+                print("无法反查服务进程 PID", file=sys.stderr)
+                return 1
+            try:
+                write_pid_file(pid_file, real_pid)
+            except (ValueError, OSError) as exc:
+                print(f"写入 PID 文件失败: {exc}", file=sys.stderr)
+                return 1
+            print(real_pid)
+            return 0
         if cmd == "write-pid":
             # write-pid <path> <pid>
-            write_pid_file(sys.argv[2], int(sys.argv[3]))
+            try:
+                write_pid_file(argv[2], int(str(argv[3]).strip().replace("\r", "")))
+            except (ValueError, IndexError) as exc:
+                print(f"写入 PID 文件失败: {exc}", file=sys.stderr)
+                return 1
             return 0
         if cmd == "read-pid":
             # read-pid <path>
-            pid = read_pid_file(sys.argv[2])
+            pid = read_pid_file(argv[2])
             if pid:
                 print(pid)
                 return 0
             return 1
         if cmd == "kill":
             # kill <pid> [--force]
-            pid = int(sys.argv[2])
-            force = "--force" in sys.argv[3:]
+            pid = int(argv[2])
+            force = "--force" in argv[3:]
             kill_pid(pid, force)
             return 0
         if cmd == "kill-netops-on-port":
             # 清理监听该端口的 NetOps 残留进程
-            port = int(sys.argv[2])
+            port = int(argv[2])
             for pid in pids_by_port(port):
                 if is_netops_process(pid):
                     if kill_pid(pid, force=True):
                         print(pid)
             return 0
         if cmd == "spawn":
-            # spawn <log_file> <cwd> <cmd...>
-            log_file = sys.argv[2]
-            cwd = sys.argv[3]
-            args = sys.argv[4:]
+            # spawn <log_file> <cwd> <port> <cmd...>
+            # 返回真正运行服务的进程 PID（而非 WMI 的 cmd 包装进程）
+            log_file = argv[2]
+            cwd = argv[3]
+            port = int(argv[4])
+            args = argv[5:]
             if not args:
                 return 2
-            print(spawn_detached(args, cwd, log_file))
+            spawn_detached(args, cwd, log_file)
+            # 反查真正的 uvicorn 进程 PID
+            real_pid = find_service_pid(port, timeout=40)
+            if not real_pid:
+                # 反查失败时退而求其次：至少把包装进程 PID 返回去
+                print(0)
+                return 1
+            print(real_pid)
             return 0
     except (ValueError, IndexError):
         return 2

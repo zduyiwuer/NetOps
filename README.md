@@ -169,6 +169,11 @@ cd ../backend && python -m uvicorn app.main:app --host 0.0.0.0 --port 8900
 不想一直开着终端？用随项目提供的启停脚本，服务会在后台常驻，
 **关闭终端 / 退出 SSH 后依然继续运行**。
 
+> **Windows 上是怎么做到的**：用 WMI（`Win32_Process.Create`）创建后台进程——
+> 进程由系统服务托管，**不属于启动它的终端 / 脚本 / 工具的进程树**，
+> 因此父进程一退出也不受影响。Linux / macOS 上则用 `start_new_session`
+> 创建独立会话。两种方式都会把 PID 写进 `backend/data/run/netops.pid`。
+
 | 操作 | Linux / macOS | Windows |
 | --- | --- | --- |
 | 后台启动 | `./start.sh` | `start.bat` |

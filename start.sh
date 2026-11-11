@@ -103,17 +103,17 @@ if [ -f "$LOG_FILE" ] && [ "$(wc -c < "$LOG_FILE")" -gt 5242880 ]; then
 fi
 
 # 用 Python 以平台原生方式启动脱离终端的进程：
-#   Windows -> DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
+#   Windows -> WMI Win32_Process.Create（由系统服务托管，完全脱离父进程）
 #   Linux   -> start_new_session（setsid 语义）
 # 这样父 shell / 终端退出后服务仍继续运行。
-NEW_PID="$(python -m scripts.service_helper spawn "$LOG_FILE" "$BACKEND" \
+# start-service 一步完成：启动 + 反查真实 PID + 写 PID 文件
+NEW_PID="$(python -m scripts.service_helper start-service "$LOG_FILE" "$BACKEND" "$PID_FILE" "$PORT" \
   python -m uvicorn app.main:app --host "$HOST" --port "$PORT" 2>/dev/null | head -1)"
 
 if [ -z "$NEW_PID" ]; then
   echo "启动失败：无法创建后台进程"
   exit 1
 fi
-python -m scripts.service_helper write-pid "$PID_FILE" "$NEW_PID"
 
 # ------------------------------------------------- 健康检查（等待就绪）
 # 必须「进程存活」且「端口可连」才算就绪——

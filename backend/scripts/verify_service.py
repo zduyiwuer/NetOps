@@ -226,6 +226,41 @@ def main() -> int:
     check("stop.bat 可执行", rc == 0, f"rc={rc}")
     check("stop.bat 后端口释放", helper("reachable", str(PORT)) == 1)
 
+    # ------------------------------------------------- 5. 脱离父进程存活
+    print("\n[5] 后台进程脱离与 PID 准确性")
+    # 用一个独立的子进程启动服务：它启动完后自己退出，
+    # 若服务仍存活，说明进程已真正脱离父进程
+    probe = (
+        "import os,sys,subprocess;"
+        "r=subprocess.run(['cmd.exe','/c','start.bat'],capture_output=True,cwd=r'%s');"
+        "sys.exit(r.returncode)" % ROOT
+    )
+    try:
+        subprocess.run(
+            [sys.executable, "-c", probe],
+            capture_output=True, timeout=400,
+            env={**os.environ, "NETOPS_NO_PAUSE": "1"},
+        )
+    except subprocess.TimeoutExpired:
+        check("独立进程启动服务", False, "超时")
+
+    time.sleep(3)
+    check("父进程退出后服务仍存活", helper("reachable", str(PORT)) == 0, f"端口 {PORT}")
+
+    pid_file = BACKEND / "data" / "run" / "netops.pid"
+    check("PID 文件存在", pid_file.exists())
+    if pid_file.exists():
+        raw = pid_file.read_bytes()
+        pid_text = raw.decode("utf-8", "replace").strip()
+        check("PID 文件无多余字符", pid_text.isdigit(), repr(raw))
+        check("PID 文件用 LF 换行", b"\r" not in raw, repr(raw))
+        if pid_text.isdigit():
+            check("PID 进程存活", helper("alive", pid_text) == 0, f"PID {pid_text}")
+            # PID 必须指向真正的服务进程，而不是启动过程中的临时进程
+            check("PID 指向 uvicorn 服务进程", helper("is-netops", pid_text) == 0, f"PID {pid_text}")
+
+    run(["cmd.exe", "/c", "stop.bat"], timeout=240)
+
     passed = sum(1 for _, c, _ in results if c)
     print(f"\n=== 结果：{passed}/{len(results)} 通过 ===\n")
     if passed != len(results):

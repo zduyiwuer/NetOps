@@ -124,6 +124,36 @@ if os.name == "nt":
         except Exception:
             return None
 
+    def process_create_time(pid: int) -> int:
+        """进程创建时间（Windows FILETIME 数值）。
+
+        用于在多个同名进程里挑出**最新启动**的那一个。
+        读不到返回 0。
+        """
+        try:
+            handle = _kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+            if not handle:
+                return 0
+            try:
+                creation = wintypes.FILETIME()
+                exit_time = wintypes.FILETIME()
+                kernel_time = wintypes.FILETIME()
+                user_time = wintypes.FILETIME()
+                ok = _kernel32.GetProcessTimes(
+                    handle,
+                    ctypes.byref(creation),
+                    ctypes.byref(exit_time),
+                    ctypes.byref(kernel_time),
+                    ctypes.byref(user_time),
+                )
+                if not ok:
+                    return 0
+                return (creation.dwHighDateTime << 32) | creation.dwLowDateTime
+            finally:
+                _kernel32.CloseHandle(handle)
+        except Exception:
+            return 0
+
     def list_python_pids() -> List[int]:
         """列出所有 python.exe / pythonw.exe 进程的 PID。"""
         import subprocess
