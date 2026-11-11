@@ -63,6 +63,10 @@ class VendorProfile:
     key: str
     label: str
     netmiko_device_type: str
+    # 设备类别（交换机 / 防火墙 / 无线控制器 / 通用），用于前端分组展示
+    category: str = "通用"
+    # 一句话说明该厂商的采集特点与特有指标
+    desc: str = ""
     cpu_oids: List[str] = field(default_factory=list)
     mem_total_oids: List[str] = field(default_factory=list)
     mem_used_oids: List[str] = field(default_factory=list)
@@ -95,6 +99,8 @@ VENDORS: Dict[str, VendorProfile] = {
         key="routeros",
         label="MikroTik RouterOS",
         netmiko_device_type="mikrotik_routeros",
+        category="交换机",
+        desc="RouterOS 交换机与路由器；CPU 取 CPU 负载，内存走系统资源命令",
         # mtxrInfo: .4=CpuLoad .7=CpuTemperature .9=TotalMemory .10=FreeMemory
         cpu_oids=["1.3.6.1.4.1.14988.1.1.3.4.4.0"],
         mem_total_oids=["1.3.6.1.4.1.14988.1.1.3.4.9.0"],
@@ -109,6 +115,8 @@ VENDORS: Dict[str, VendorProfile] = {
         key="cisco",
         label="Cisco IOS/NXOS",
         netmiko_device_type="cisco_ios",
+        category="交换机",
+        desc="Cisco IOS / NXOS 交换机与路由器；CPU 取 5 分钟平均负载，内存走进程内存池",
         # CISCO-PROCESS-MIB 5min + HOST-RESOURCES-MIB
         cpu_oids=[
             "1.3.6.1.4.1.9.9.109.1.1.1.1.8",
@@ -134,6 +142,8 @@ VENDORS: Dict[str, VendorProfile] = {
         key="huawei",
         label="华为 VRP",
         netmiko_device_type="huawei_vrp",
+        category="交换机",
+        desc="华为 VRP 系列交换机与路由器；CPU 取 5 分钟平均负载，内存走设备内存占用",
         cpu_oids=[
             "1.3.6.1.4.1.2011.2.239.1.1.1.1.4",
             "1.3.6.1.4.1.2011.2.239.1.1.1.1.6",
@@ -156,6 +166,8 @@ VENDORS: Dict[str, VendorProfile] = {
         key="h3c",
         label="新华三 H3C Comware",
         netmiko_device_type="hp_comware",
+        category="交换机",
+        desc="新华三 H3C Comware 系列；CPU 取 5 分钟平均负载，内存走系统内存使用率",
         cpu_oids=[
             "1.3.6.1.4.1.25506.2.6.1.1.1.1.1.6",
             f"{OID_HR_PROCESSOR_LOAD}.1",
@@ -177,6 +189,8 @@ VENDORS: Dict[str, VendorProfile] = {
         key="cisco_asa",
         label="Cisco ASA 防火墙",
         netmiko_device_type="cisco_asa",
+        category="防火墙",
+        desc="Cisco ASA 防火墙；额外采集连接数、CSC 表容量等安全设备专属指标",
         # CISCO-PROCESS-MIB + ASA 内存池
         cpu_oids=[
             "1.3.6.1.4.1.9.9.109.1.1.1.1.8",
@@ -211,6 +225,8 @@ VENDORS: Dict[str, VendorProfile] = {
         key="cisco_wlc",
         label="Cisco WLC 无线控制器",
         netmiko_device_type="cisco_wlc",
+        category="无线控制器",
+        desc="Cisco WLC 无线控制器；额外采集 AP 数与客户端数等无线侧指标",
         # CISCO-WLC-MIB / HOST-RESOURCES-MIB
         cpu_oids=[
             "1.3.6.1.4.1.14179.1.6.3.6.0",  # ciscoWlcCpuUtilization
@@ -242,6 +258,8 @@ VENDORS: Dict[str, VendorProfile] = {
         key="fortinet",
         label="飞塔 Fortinet FortiGate",
         netmiko_device_type="fortinet",
+        category="防火墙",
+        desc="飞塔 FortiGate 防火墙；额外采集会话数、VPN 隧道数等安全设备专属指标",
         # FORTINET-MIB: fgSysCpuUtilization / fgSysMemUsage
         cpu_oids=[
             "1.3.6.1.4.1.12356.101.1.1.1.0",  # fgSysCpuUtilization
@@ -278,6 +296,8 @@ VENDORS: Dict[str, VendorProfile] = {
         key="generic",
         label="通用标准 MIB 设备",
         netmiko_device_type="autodetect",
+        category="通用",
+        desc="按标准 MIB 采集的通用设备，适用于其他未单独适配的厂商设备",
         cpu_oids=[f"{OID_HR_PROCESSOR_LOAD}.1"],
         mem_total_oids=[OID_HR_MEMORY_SIZE],
         mem_used_oids=[],
@@ -330,4 +350,18 @@ def resolve_vendor(name: Optional[str]) -> VendorProfile:
 
 
 def vendor_options() -> List[Dict[str, str]]:
-    return [{"value": v.key, "label": v.label, "netmiko": v.netmiko_device_type} for v in VENDORS.values()]
+    """厂商选项列表。
+
+    登录页与系统管理的「平台说明」都用这份数据，
+    新增厂商只需注册画像，前端两处自动同步。
+    """
+    return [
+        {
+            "value": v.key,
+            "label": v.label,
+            "netmiko": v.netmiko_device_type,
+            "category": v.category,
+            "desc": v.desc,
+        }
+        for v in VENDORS.values()
+    ]

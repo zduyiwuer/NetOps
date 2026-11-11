@@ -440,10 +440,43 @@
 
       <el-tab-pane label="平台说明" name="about">
         <div class="table-card">
+          <div class="card-title">平台概况</div>
+          <el-descriptions :column="1" size="small" border>
+            <el-descriptions-item label="平台名称">
+              {{ health.app || '网络设备运维平台' }}
+            </el-descriptions-item>
+            <el-descriptions-item label="平台定位">
+              面向企业网络的多厂商设备统一运维与监控平台，覆盖交换机、防火墙与无线控制器
+            </el-descriptions-item>
+            <el-descriptions-item label="当前版本">
+              {{ health.version || '-' }}
+            </el-descriptions-item>
+          </el-descriptions>
+        </div>
+
+        <div class="table-card" style="margin-top: 12px">
+          <div class="card-title">
+            <span>支持厂商</span>
+            <span class="text-muted" style="font-size: 12px">
+              共 {{ vendorList.length }} 类设备，采集与巡检模板按厂商自动匹配
+            </span>
+          </div>
+          <el-table :data="vendorList" size="small" stripe>
+            <el-table-column prop="label" label="厂商 / 设备类型" min-width="200" />
+            <el-table-column prop="category" label="类别" width="120" align="center">
+              <template #default="{ row }">
+                <el-tag size="small" effect="plain" :type="vendorCategoryType(row.category)">{{ row.category }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column prop="desc" label="说明" min-width="320" show-overflow-tooltip />
+          </el-table>
+        </div>
+
+        <div class="table-card" style="margin-top: 12px">
           <div class="card-title">功能清单</div>
           <el-descriptions :column="1" size="small" border>
             <el-descriptions-item label="多厂商采集">
-              MikroTik RouterOS、Cisco IOS/NXOS、华为 VRP、新华三 H3C Comware（SNMP v1/v2c/v3 + SSH 兜底）
+              {{ vendorList.map((v) => v.label).join('、') }}（SNMP v1/v2c/v3 + SSH 兜底）
             </el-descriptions-item>
             <el-descriptions-item label="实时接口速率">
               基于 IF-MIB 64 位计数器差分计算，支持 10G 及以上端口，自动识别协商速率
@@ -451,11 +484,20 @@
             <el-descriptions-item label="资源监控">CPU 使用率、内存使用率、设备温度、SNMP 响应时延、运行时长</el-descriptions-item>
             <el-descriptions-item label="告警">阈值规则 + 静默期 + 自动恢复，支持 Webhook / 企业微信 / 钉钉 / 邮件通知</el-descriptions-item>
             <el-descriptions-item label="日志">内置 Syslog UDP/TCP 接收服务（RFC3164 / RFC5424），支持 SSH 主动拉取</el-descriptions-item>
+            <el-descriptions-item label="流量分析">
+              NetFlow / sFlow 会话采集，接口 / 设备 / 门店三个维度的流量 TopN 排行与趋势分析
+            </el-descriptions-item>
+            <el-descriptions-item label="遥测采集">gNMI（collector + client 双模式）、OpenConfig 与厂商私有模型路径映射、遥测样本归一化入库</el-descriptions-item>
+            <el-descriptions-item label="配置备份">SSH 抓取 running-config，自动归档、版本对比、定时备份</el-descriptions-item>
+            <el-descriptions-item label="配置变更审批">
+              配置下发须经审批员审批，驳回需填写意见；申请人不能审批自己的申请，支持按厂商自动切换配置模式
+            </el-descriptions-item>
+            <el-descriptions-item label="基线巡检">可定制检查项模板，自动判定并生成 HTML / Excel 巡检报告</el-descriptions-item>
             <el-descriptions-item label="资产管理">设备台账、资产编号、序列号、保修到期提醒、采购与合同信息</el-descriptions-item>
             <el-descriptions-item label="门店管理">按门店 / 网点组织设备，统计各门店在线率与资产分布</el-descriptions-item>
-            <el-descriptions-item label="流量分析">接口 / 设备 / 门店三个维度的流量 TopN 排行与趋势分析</el-descriptions-item>
-            <el-descriptions-item label="配置备份">SSH 抓取 running-config，自动归档、版本对比、定时备份</el-descriptions-item>
-            <el-descriptions-item label="基线巡检">可定制检查项模板，自动判定并生成 HTML / Excel 巡检报告</el-descriptions-item>
+            <el-descriptions-item label="用户与权限">
+              管理员 / 操作员 / 审批员 / 只读四种角色，一个用户可分配多个角色
+            </el-descriptions-item>
             <el-descriptions-item label="域控对接">LDAP / Active Directory 认证、用户同步、AD 组映射角色</el-descriptions-item>
           </el-descriptions>
         </div>
@@ -579,6 +621,20 @@ const roleOptions = ref([
   { key: 'approver', label: '审批员', desc: '审批配置变更申请，不含设备操作权' },
   { key: 'viewer', label: '只读', desc: '仅查看，不可修改任何配置' },
 ])
+
+// 厂商列表（从后端拉取，与登录页、设备管理页同源）
+const vendorList = ref([])
+// 类别展示顺序：交换机 → 防火墙 → 无线控制器 → 通用
+const VENDOR_CATEGORY_ORDER = ['交换机', '防火墙', '无线控制器', '通用']
+const VENDOR_CATEGORY_TYPE = {
+  交换机: '',
+  防火墙: 'danger',
+  无线控制器: 'warning',
+  通用: 'info',
+}
+function vendorCategoryType(cat) {
+  return VENDOR_CATEGORY_TYPE[cat] || 'info'
+}
 
 const themeOptions = THEME_OPTIONS
 
@@ -746,6 +802,23 @@ async function loadRoles() {
   }
 }
 
+// 拉取厂商清单（含分类与说明），供「平台说明」展示
+async function loadVendors() {
+  try {
+    const res = await authApi.listVendors()
+    const items = Array.isArray(res.items) ? res.items : []
+    if (items.length) {
+      vendorList.value = [...items].sort((a, b) => {
+        const ia = VENDOR_CATEGORY_ORDER.indexOf(a.category)
+        const ib = VENDOR_CATEGORY_ORDER.indexOf(b.category)
+        return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib)
+      })
+    }
+  } catch (e) {
+    /* 忽略，平台说明的厂商表格留空 */
+  }
+}
+
 async function loadLoginLogs() {
   try {
     const res = await authApi.loginLogs(100)
@@ -756,7 +829,7 @@ async function loadLoginLogs() {
 }
 
 async function reload() {
-  await Promise.all([loadHealth(), loadUsers(), loadLoginLogs(), loadSettings(), loadJobs(), loadRoles()])
+  await Promise.all([loadHealth(), loadUsers(), loadLoginLogs(), loadSettings(), loadJobs(), loadRoles(), loadVendors()])
 }
 
 async function loadSettings() {

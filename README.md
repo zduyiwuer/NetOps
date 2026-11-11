@@ -95,7 +95,7 @@ netops/
 │   │   │   ├── ssh.py          Netmiko SSH 封装（配置备份 / 日志 / CPU 内存兜底）
 │   │   │   ├── netflow.py      NetFlow v5/v9 + IPFIX 报文解析与 UDP/TCP 接收
 │   │   │   ├── telemetry.py    gNMI Collector / Client 与路径映射
-│   │   │   ├── vendors.py      四厂商画像：OID 候补表 + SSH 命令模板
+│   │   │   ├── vendors.py      8 类厂商画像：OID 候补表 + SSH 命令模板 + 分类说明
 │   │   │   └── engine.py       采集引擎（速率差分、指标归一化、mock 模式）
 │   │   ├── proto/              gNMI protobuf 定义（gnmi.proto，与官方规范一致）
 │   │   ├── services/           业务服务层
@@ -578,6 +578,9 @@ python -m scripts.verify_service       # 54 项：脚本齐全性、编码、hel
 
 # 16. 登录页品牌名与厂商列表验证（需先启动后端服务）
 python -m scripts.verify_login_page     # 20 项：公开配置接口、厂商列表同源、页面渲染、品牌名替换
+
+# 17. 系统管理·平台说明页验证（需先启动后端服务）
+python -m scripts.verify_about_page     # 23 项：厂商分类与说明、类别排序、功能清单完整性
 ```
 
 > 容器内运行验证脚本时，需先启动服务并把 `BASE` 指向容器地址。
