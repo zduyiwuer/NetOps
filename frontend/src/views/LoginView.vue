@@ -3,9 +3,9 @@
     <div class="login-left">
       <div class="brand">
         <el-icon :size="34"><Monitor /></el-icon>
-        <h1>NetOps</h1>
+        <h1>{{ appName }}</h1>
       </div>
-      <p class="tagline">网络设备监控平台</p>
+      <p class="tagline">面向多厂商网络设备的统一运维与监控平台</p>
       <ul class="features">
         <li><el-icon><DataLine /></el-icon>实时接口速率与流量分析</li>
         <li><el-icon><Cpu /></el-icon>CPU / 内存等资源指标监控</li>
@@ -93,7 +93,20 @@ const userStore = useUserStore()
 const formRef = ref()
 const loading = ref(false)
 const errorMsg = ref('')
-const vendorTags = ['MikroTik RouterOS', 'Cisco', '华为 VRP', 'H3C Comware']
+const appName = ref('网络设备运维平台')
+// 厂商列表由后端 /api/auth/config 下发，与设备管理页同源；
+// 拉取失败时回退到内置清单，保证登录页始终有内容
+const FALLBACK_VENDORS = [
+  'MikroTik RouterOS',
+  'Cisco IOS/NXOS',
+  'Cisco ASA 防火墙',
+  'Cisco WLC 无线控制器',
+  '华为 VRP',
+  '新华三 H3C Comware',
+  '飞塔 Fortinet FortiGate',
+  '通用标准 MIB 设备',
+]
+const vendorTags = ref([...FALLBACK_VENDORS])
 
 const form = reactive({
   username: '',
@@ -122,8 +135,16 @@ async function submit() {
   }
 }
 
-onMounted(() => {
-  userStore.loadConfig()
+onMounted(async () => {
+  await userStore.loadConfig()
+  // 公开配置里带回了厂商列表与平台名，直接用于登录页展示
+  const cfg = userStore.config
+  if (cfg?.vendors?.length) {
+    vendorTags.value = cfg.vendors.map((v) => v.label)
+  }
+  if (cfg?.app_name) {
+    appName.value = cfg.app_name
+  }
 })
 </script>
 
@@ -152,7 +173,7 @@ onMounted(() => {
 }
 
 .brand h1 {
-  font-size: 32px;
+  font-size: 26px;
   margin: 0;
   letter-spacing: 1px;
 }

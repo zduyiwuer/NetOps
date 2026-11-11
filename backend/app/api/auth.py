@@ -103,12 +103,21 @@ def _log_login(db: Session, username: str, success: bool, source: str, ip: str, 
 
 @router.get("/config")
 def auth_config() -> Dict[str, Any]:
-    """前端登录页需要的公开配置。"""
+    """前端登录页需要的公开配置。
+
+    登录页在认证之前就要展示平台信息（应用名、支持厂商等），
+    因此这里的接口不带鉴权，只能返回不敏感的内容。
+    """
+    from app.collectors.vendors import vendor_options
+
     return {
         "ldap_enabled": settings.ldap_enabled,
         "ldap_domain": settings.ldap_domain,
         "app_name": settings.app_name,
         "version": settings.app_version,
+        # 登录页「支持厂商」标签：与设备管理页的厂商列表同源，
+        # 新增厂商后无需再改前端
+        "vendors": vendor_options(),
     }
 
 

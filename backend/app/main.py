@@ -124,7 +124,7 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.warning("AAA 服务启动失败: %s", exc)
 
-    logger.info("NetOps 后端已就绪 · %s", settings.app_name)
+    logger.info("后端已就绪 · %s", settings.app_name)
     try:
         yield
     finally:
@@ -138,7 +138,7 @@ async def lifespan(app: FastAPI):
             await stop_aaa_services()
         except Exception:
             pass
-        logger.info("NetOps 后端已关闭")
+        logger.info("后端已关闭")
 
 
 app = FastAPI(

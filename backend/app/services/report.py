@@ -148,7 +148,7 @@ def render_html(ctx: Dict[str, Any]) -> str:
 </tbody>
 </table>
 
-<footer>本报告由 NetOps 网络设备监控平台自动生成 · {escape(ctx['generated_at'])}</footer>
+<footer>本报告由网络设备运维平台自动生成 · {escape(ctx['generated_at'])}</footer>
 </body>
 </html>"""
     return html

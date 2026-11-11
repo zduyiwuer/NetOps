@@ -13,7 +13,7 @@
           <div class="stat-card">
             <div class="label"><el-icon><Monitor /></el-icon>平台版本</div>
             <div class="value" style="font-size: 20px">{{ health.version || '-' }}</div>
-            <div class="foot">{{ health.app || 'NetOps' }}</div>
+            <div class="foot">{{ health.app || '网络设备运维平台' }}</div>
           </div>
           <div class="stat-card">
             <div class="label"><el-icon><Timer /></el-icon>调度器</div>

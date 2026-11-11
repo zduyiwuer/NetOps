@@ -3,7 +3,7 @@
     <aside class="sidebar" :class="{ collapsed }">
       <div class="logo">
         <el-icon :size="22"><Monitor /></el-icon>
-        <span v-show="!collapsed" class="logo-text">NetOps</span>
+        <span v-show="!collapsed" class="logo-text">网络设备运维平台</span>
       </div>
 
       <div v-show="!collapsed" class="menu-search">

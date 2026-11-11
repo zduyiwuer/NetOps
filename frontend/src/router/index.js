@@ -152,7 +152,7 @@ const router = createRouter({
 
 router.beforeEach((to, from, next) => {
   const token = localStorage.getItem('netops_token')
-  document.title = to.meta?.title ? `${to.meta.title} · NetOps` : 'NetOps 网络设备监控平台'
+  document.title = to.meta?.title ? `${to.meta.title} · 网络设备运维平台` : '网络设备运维平台'
   if (!to.meta?.public && !token) {
     next({ path: '/login', query: { redirect: to.fullPath } })
     return

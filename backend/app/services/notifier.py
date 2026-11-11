@@ -108,7 +108,7 @@ class Notifier:
         if not recipients:
             return False
         msg = MIMEText(text, "plain", "utf-8")
-        msg["Subject"] = f"[NetOps] {alert.get('title', '告警')}"
+        msg["Subject"] = f"[网络设备运维平台] {alert.get('title', '告警')}"
         msg["From"] = sender
         msg["To"] = ",".join(recipients)
         return await asyncio.to_thread(self._smtp_send, host, port, sender, extra.get("password", ""), recipients, msg)

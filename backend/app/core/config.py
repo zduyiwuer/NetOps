@@ -11,7 +11,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="NETOPS_", env_file=".env", extra="ignore")
 
-    app_name: str = "NetOps 网络设备监控平台"
+    app_name: str = "网络设备运维平台"
     app_version: str = "1.0.0"
     debug: bool = False
 

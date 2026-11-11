@@ -368,8 +368,8 @@ async def test_channel(
         return {"ok": False, "message": "渠道不存在"}
     payload = {
         "id": 0,
-        "title": "NetOps 通知渠道测试",
-        "message": "这是一条来自 NetOps 平台的测试通知，若你看到它说明渠道配置正确。",
+        "title": "网络设备运维平台 通知渠道测试",
+        "message": "这是一条来自网络设备运维平台的测试通知，若你看到它说明渠道配置正确。",
         "metric": "test",
         "value": 0,
         "threshold": 0,

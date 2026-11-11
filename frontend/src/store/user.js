@@ -15,6 +15,8 @@ export const useUserStore = defineStore('user', {
     user: JSON.parse(localStorage.getItem('netops_user') || 'null'),
     ldapEnabled: false,
     ldapDomain: '',
+    // 公开配置（平台名、支持厂商等），登录页在认证前也要用
+    config: {},
   }),
   getters: {
     isLoggedIn: (state) => !!state.token,
@@ -64,6 +66,7 @@ export const useUserStore = defineStore('user', {
         const cfg = await authApi.config()
         this.ldapEnabled = !!cfg.ldap_enabled
         this.ldapDomain = cfg.ldap_domain || ''
+        this.config = cfg || {}
       } catch (e) {
         /* 忽略 */
       }
