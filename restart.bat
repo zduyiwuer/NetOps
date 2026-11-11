@@ -11,6 +11,7 @@ setlocal
 set "ROOT=%~dp0"
 
 echo ==^> 停止服务
+set "NETOPS_NO_PAUSE=1"
 call "%ROOT%stop.bat"
 if errorlevel 1 echo     （停止时出现问题，继续启动）
 
@@ -21,4 +22,12 @@ if /i "%~1"=="--rebuild" (
 ) else (
   call "%ROOT%start.bat"
 )
-exit /b %errorlevel%
+goto :finish
+
+:finish
+REM ---- 收尾：双击运行时暂停，避免窗口一闪而过 ----
+if defined NETOPS_NO_PAUSE exit /b %ERRORLEVEL%
+echo.
+echo 按任意键关闭此窗口...
+pause >nul
+exit /b %ERRORLEVEL%

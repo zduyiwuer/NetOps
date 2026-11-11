@@ -39,10 +39,12 @@ fi
 echo "状态    : 运行中"
 echo "PID     : $PID"
 
-if python -m scripts.service_helper reachable "$PORT" >/dev/null 2>&1; then
-  echo "健康    : 正常（端口 $PORT 可连接）"
+# 健康：必须「进程存活」且「端口可连」才算正常，
+# 只看端口会在进程已死但端口被其他程序占用时误报「健康」
+if python -m scripts.service_helper healthy "$PID" "$PORT" >/dev/null 2>&1; then
+  echo "健康    : 正常（进程存活，端口 $PORT 可连接）"
 else
-  echo "健康    : 异常（端口 $PORT 无法连接，进程可能仍在启动或已卡死）"
+  echo "健康    : 异常（进程存活但端口 $PORT 无法连接，服务可能仍在启动或已卡死）"
 fi
 
 echo "日志    : $LOG_FILE"

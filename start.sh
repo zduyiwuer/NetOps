@@ -116,10 +116,12 @@ fi
 python -m scripts.service_helper write-pid "$PID_FILE" "$NEW_PID"
 
 # ------------------------------------------------- 健康检查（等待就绪）
+# 必须「进程存活」且「端口可连」才算就绪——
+# 只看端口会被端口上的其他服务或连接残留误导，出现假成功。
 echo -n "==> 等待服务就绪"
 READY=0
 for _ in $(seq 1 60); do
-  if python -m scripts.service_helper reachable "$PORT" >/dev/null 2>&1; then
+  if python -m scripts.service_helper healthy "$NEW_PID" "$PORT" >/dev/null 2>&1; then
     READY=1
     break
   fi

@@ -318,6 +318,21 @@ def read_pid_file(path: str) -> int:
     return int(text) if text.isdigit() else 0
 
 
+def service_healthy(pid: int, port: int) -> bool:
+    """服务是否真正健康。
+
+    必须**同时**满足：
+    1. 目标进程还活着；
+    2. 端口能连上。
+
+    只查端口会被「端口上有别的服务」或「连接残留」误导，
+    出现「报告启动成功、实际进程已死」的假成功。
+    """
+    if pid and not pid_alive(pid):
+        return False
+    return port_reachable(port)
+
+
 def main() -> int:
     if len(sys.argv) < 2:
         print(__doc__)
@@ -372,6 +387,11 @@ def main() -> int:
                 print(path)
                 return 0
             return 1
+        if cmd == "healthy":
+            # healthy <pid> <port>
+            pid = int(sys.argv[2])
+            port = int(sys.argv[3])
+            return 0 if service_healthy(pid, port) else 1
         if cmd == "write-pid":
             # write-pid <path> <pid>
             write_pid_file(sys.argv[2], int(sys.argv[3]))

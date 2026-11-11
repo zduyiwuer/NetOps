@@ -35,7 +35,7 @@ if /i "%~1"=="--rebuild"  set "FORCEBUILD=1" & shift & goto parse_args
 if /i "%~1"=="--help"     goto usage
 if /i "%~1"=="-h"         goto usage
 echo 未知参数：%~1（用 --help 查看用法）
-exit /b 1
+goto :finish
 
 :usage
 echo NetOps 启动脚本（Windows）
@@ -88,7 +88,7 @@ if exist "%PIDFILE%" (
     if not errorlevel 1 (
       echo NetOps 已在运行（PID !OLDPID!），如需重启请执行 restart.bat
       popd
-      exit /b 0
+goto :finish
     )
   )
   del /q "%PIDFILE%" >nul 2>nul
@@ -100,7 +100,7 @@ python -m scripts.service_helper port-busy %PORT% >nul 2>nul
 if not errorlevel 1 (
   echo 端口 %PORT% 已被占用，请先释放该端口
   popd
-  exit /b 1
+goto :finish
 )
 
 REM ------------------------------------------------------------ 前台模式
@@ -109,7 +109,7 @@ if "%FOREGROUND%"=="1" (
   echo     按 Ctrl+C 停止
   python -m uvicorn app.main:app --host %HOST% --port %PORT%
   popd
-  exit /b %errorlevel%
+goto :finish
 )
 
 REM ------------------------------------------------------------ 后台模式
@@ -133,7 +133,7 @@ for /f "usebackq delims=" %%P in (`python -m scripts.service_helper spawn "%LOGF
 if not defined NEWPID (
   echo 启动失败：无法创建后台进程，请检查日志：%LOGFILE%
   popd
-  exit /b 1
+goto :finish
 )
 REM PID 文件由 helper 统一用 LF 换行写入
 REM （bat 的 for /f 读 CRLF 会把 \r 带进变量，导致 taskkill 拿到错误 PID）
@@ -141,7 +141,8 @@ python -m scripts.service_helper write-pid "%PIDFILE%" %NEWPID%
 REM ---------------------------------------------------- 健康检查等待就绪
 echo ==^> 等待服务就绪
 for /L %%I in (1,1,60) do (
-  python -m scripts.service_helper reachable %PORT% >nul 2>nul
+  REM 必须「进程存活」且「端口可连」才算就绪，避免只查端口导致假成功
+  python -m scripts.service_helper healthy %NEWPID% %PORT% >nul 2>nul
   if not errorlevel 1 goto ready
   echo | set /p "=."
   timeout /t 1 /nobreak >nul
@@ -155,7 +156,7 @@ echo     访问地址 : http://localhost:%PORT%
 echo     运行日志 : %LOGFILE%
 echo     停止服务 : stop.bat
 popd
-exit /b 0
+goto :finish
 
 :not_ready
 echo.
@@ -163,4 +164,20 @@ echo 服务在 60 秒内未就绪。最近日志：
 powershell -NoProfile -Command "Get-Content -Tail 20 '%LOGFILE%' -EA SilentlyContinue"
 echo 进程仍在运行，可用 stop.bat 停止
 popd
-exit /b 1
+goto :finish
+
+:finish
+REM ---- 收尾：双击运行时暂停，避免窗口一闪而过 ----
+if defined NETOPS_NO_PAUSE exit /b %ERRORLEVEL%
+echo.
+echo 按任意键关闭此窗口...
+pause >nul
+goto :finish
+
+:finish
+REM ---- 收尾：双击运行时暂停，避免窗口一闪而过 ----
+if defined NETOPS_NO_PAUSE exit /b %ERRORLEVEL%
+echo.
+echo 按任意键关闭此窗口...
+pause >nul
+exit /b %ERRORLEVEL%

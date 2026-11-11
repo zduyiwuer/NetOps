@@ -34,9 +34,15 @@ def check(name: str, cond: bool, detail: str = "") -> None:
 
 
 def run(cmd: list[str], timeout: int = 300) -> tuple[int, str]:
-    """执行命令，返回退出码与输出（GBK/UTF-8 兼容解码）。"""
+    """执行命令，返回退出码与输出（GBK/UTF-8 兼容解码）。
+
+    批处理默认带 pause（双击时不闪退），自动化调用需设
+    NETOPS_NO_PAUSE=1 跳过等待。
+    """
+    env = dict(os.environ)
+    env.setdefault("NETOPS_NO_PAUSE", "1")
     try:
-        r = subprocess.run(cmd, capture_output=True, cwd=str(ROOT), timeout=timeout)
+        r = subprocess.run(cmd, capture_output=True, cwd=str(ROOT), timeout=timeout, env=env)
     except subprocess.TimeoutExpired:
         return 124, "超时"
     raw = r.stdout or b""
@@ -106,6 +112,10 @@ def main() -> int:
         if path.exists():
             r = subprocess.run([BASH, "-n", str(path)], capture_output=True, timeout=60)
             check(f"{name} 语法正确", r.returncode == 0, r.stderr.decode("utf-8", "replace")[:80])
+            text = path.read_text(encoding="utf-8", errors="replace")
+            if name in ("start.sh", "status.sh"):
+                check(f"{name} 健康检查用组合判定（进程存活 + 端口可连）",
+                      "service_helper healthy" in text)
 
     # bat 编码：cmd.exe 按 GBK 读取，含中文的批处理必须是 GBK + CRLF
     for name in ("start.bat", "stop.bat", "restart.bat", "status.bat"):
@@ -119,6 +129,15 @@ def main() -> int:
                 gbk_ok = False
             check(f"{name} 为 GBK 编码（cmd 可解析）", gbk_ok)
             check(f"{name} 使用 CRLF 换行", b"\r\n" in raw)
+            text = raw.decode("gbk", errors="replace")
+            # 双击运行时窗口会一闪而过 -> 必须有 pause 收尾
+            check(f"{name} 含 pause 收尾（双击不闪退）", "pause >nul" in text)
+            check(f"{name} 支持 NETOPS_NO_PAUSE 跳过暂停",
+                  "NETOPS_NO_PAUSE" in text)
+            # 启停类脚本才有健康检查；stop/restart 不需要
+            if name in ("start.bat", "status.bat"):
+                check(f"{name} 健康检查用组合判定（进程存活 + 端口可连）",
+                      "service_helper healthy" in text)
 
     # ---------------------------------------------------------- 2. helper
     print("\n[2] service_helper 子命令")
@@ -127,6 +146,11 @@ def main() -> int:
     check("alive 不存在进程返回 1", helper("alive", "999999") == 1)
     check("alive 当前进程返回 0", helper("alive", str(os.getpid())) == 0)
     check("is-netops 对自身返回 1", helper("is-netops", str(os.getpid())) == 1)
+    # healthy：必须进程存活 + 端口可连才算健康
+    check("healthy 进程活但端口不通返回 1",
+          helper("healthy", str(os.getpid()), "1") == 1)
+    check("healthy 进程死返回 1",
+          helper("healthy", "999999", "8900") == 1)
 
     # ---------------------------------------------------------- 3. 生命周期
     print("\n[3] 启停完整生命周期")

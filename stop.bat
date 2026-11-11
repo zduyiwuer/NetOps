@@ -22,7 +22,7 @@ if /i "%~1"=="--help"  goto usage
 if /i "%~1"=="-h"      goto usage
 if not "%~1"=="" (
   echo 未知参数：%~1（用 --help 查看用法）
-  exit /b 1
+goto :finish
 )
 
 REM 参数合法，继续执行
@@ -36,7 +36,7 @@ if not exist "%PIDFILE%" (
   timeout /t 1 /nobreak >nul
   echo 服务未在运行（无 PID 文件）
   popd
-  exit /b 0
+goto :finish
 )
 
 set "PID="
@@ -46,7 +46,7 @@ if "!PID!"=="" (
   del /q "%PIDFILE%" >nul 2>nul
   echo PID 文件为空，已清理。服务未在运行。
   popd
-  exit /b 0
+goto :finish
 )
 
 python -m scripts.service_helper alive !PID! >nul 2>nul
@@ -55,7 +55,7 @@ if errorlevel 1 (
   del /q "%PIDFILE%" >nul 2>nul
   echo 服务未在运行
   popd
-  exit /b 0
+goto :finish
 )
 
 echo ==^> 停止 NetOps（PID !PID!）
@@ -67,7 +67,7 @@ if "%FORCE%"=="1" (
   del /q "%PIDFILE%" >nul 2>nul
   echo 已强制结束
   popd
-  exit /b 0
+goto :finish
 )
 
 REM 第一步：发送终止信号
@@ -82,7 +82,7 @@ if errorlevel 1 (
   del /q "%PIDFILE%" >nul 2>nul
   echo     已停止（用时 !WAITED!s）
   popd
-  exit /b 0
+goto :finish
 )
 timeout /t 1 /nobreak >nul
 set /a WAITED+=1
@@ -96,7 +96,7 @@ python -m scripts.service_helper kill-netops-on-port %PORT% >nul 2>nul
 del /q "%PIDFILE%" >nul 2>nul
 echo 已强制停止
 popd
-exit /b 0
+goto :finish
 
 :usage
 echo NetOps 停止脚本（Windows）
@@ -104,3 +104,19 @@ echo.
 echo   stop.bat           优雅停止
 echo   stop.bat --force   立即强制结束
 exit /b 0
+
+:finish
+REM ---- 收尾：双击运行时暂停，避免窗口一闪而过 ----
+if defined NETOPS_NO_PAUSE exit /b %ERRORLEVEL%
+echo.
+echo 按任意键关闭此窗口...
+pause >nul
+goto :finish
+
+:finish
+REM ---- 收尾：双击运行时暂停，避免窗口一闪而过 ----
+if defined NETOPS_NO_PAUSE exit /b %ERRORLEVEL%
+echo.
+echo 按任意键关闭此窗口...
+pause >nul
+exit /b %ERRORLEVEL%
