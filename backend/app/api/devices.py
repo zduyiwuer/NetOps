@@ -319,6 +319,57 @@ async def trigger_collect(device_id: int, db: Session = Depends(get_db), _: User
     }
 
 
+class ProbeBatchIn(BaseModel):
+    """批量探测参数。"""
+
+    device_ids: Optional[List[int]] = Field(
+        default=None,
+        description="指定设备 ID 列表；不传则探测全部已启用设备",
+    )
+    concurrency: int = Field(default=10, ge=1, le=32, description="并发上限")
+    update_status: bool = Field(default=True, description="是否写回设备状态")
+
+
+@router.post("/devices/probe/batch")
+async def probe_devices_batch(
+    payload: ProbeBatchIn,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_operator),
+) -> Dict[str, Any]:
+    """批量探测设备在线状态。
+
+    并发受限（默认 10），避免一次性对大量设备发起请求打满网络；
+    逐台返回结果并更新设备状态。
+    """
+    from app.services import probe_service
+
+    return await probe_service.probe_many(
+        db,
+        device_ids=payload.device_ids,
+        concurrency=payload.concurrency,
+        update_status=payload.update_status,
+    )
+
+
+@router.post("/devices/{device_id}/probe")
+async def probe_device(
+    device_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_operator),
+) -> Dict[str, Any]:
+    """探测单台设备是否在线。
+
+    比 ``/test`` 更轻量：只做一次 SNMP GET（sysUpTime）判断可达性，
+    不采集接口流量与 CPU/内存，结果写回设备的 status 与 last_seen。
+    """
+    from app.services import probe_service
+
+    try:
+        return await probe_service.probe_one(db, device_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
 @router.post("/devices/{device_id}/test")
 async def test_device(device_id: int, db: Session = Depends(get_db), _: User = Depends(require_operator)) -> Dict[str, Any]:
     """连通性测试（SNMP + 可选 SSH）。"""

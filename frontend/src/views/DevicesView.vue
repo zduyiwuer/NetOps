@@ -13,6 +13,14 @@
             </el-dropdown-menu>
           </template>
         </el-dropdown>
+        <el-button
+          v-if="userStore.canOperate"
+          :icon="Connection"
+          :loading="batchProbing"
+          @click="probeAll"
+        >
+          探测全部设备
+        </el-button>
         <el-button v-if="userStore.canOperate" type="primary" :icon="Plus" @click="openDialog()">
           新增设备
         </el-button>
@@ -77,11 +85,23 @@
             <span v-if="!row.use_snmp && !row.use_telemetry && !row.use_netflow" class="text-muted">未启用</span>
           </template>
         </el-table-column>
-        <el-table-column label="状态" width="80" align="center">
+        <el-table-column label="状态" width="140" align="center">
           <template #default="{ row }">
-            <el-tag :type="statusType(row.status)" size="small" effect="dark">
-              {{ statusText(row.status) }}
-            </el-tag>
+            <el-tooltip :content="row.last_seen ? `最后在线：${fmtTime(row.last_seen)}` : '尚无探测记录'" placement="top">
+              <el-tag :type="statusType(row.status)" size="small" effect="dark">
+                {{ statusText(row.status) }}
+              </el-tag>
+            </el-tooltip>
+            <el-button
+              v-if="userStore.canOperate"
+              link
+              type="primary"
+              size="small"
+              :loading="probingId === row.id"
+              @click="probeOne(row)"
+            >
+              探测
+            </el-button>
           </template>
         </el-table-column>
         <el-table-column prop="asset_tag" label="资产编号" width="130" class-name="mono" />
@@ -384,6 +404,57 @@
         </el-button>
       </template>
     </el-dialog>
+
+    <!-- 在线探测结果 -->
+    <el-dialog v-model="probeDialog" title="设备在线探测结果" width="880px" top="6vh">
+      <div v-if="probeResult" class="probe-summary">
+        <div class="probe-stat">
+          <div class="label">探测设备</div>
+          <div class="value">{{ probeResult.total }} 台</div>
+        </div>
+        <div class="probe-stat">
+          <div class="label">在线</div>
+          <div class="value text-ok">{{ probeResult.online }} 台</div>
+        </div>
+        <div class="probe-stat">
+          <div class="label">离线</div>
+          <div class="value text-warn">{{ probeResult.offline }} 台</div>
+        </div>
+        <div class="probe-stat">
+          <div class="label">耗时</div>
+          <div class="value">{{ probeResult.elapsed_sec }} 秒</div>
+        </div>
+      </div>
+
+      <el-table v-if="probeResult" :data="probeResult.items" size="small" stripe max-height="420">
+        <el-table-column prop="name" label="设备名称" min-width="160" show-overflow-tooltip />
+        <el-table-column prop="ip" label="管理 IP" width="140" class-name="mono" />
+        <el-table-column label="探测结果" width="100" align="center">
+          <template #default="{ row }">
+            <el-tag :type="row.online ? 'success' : 'danger'" size="small" effect="dark">
+              {{ row.online ? '在线' : '离线' }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="响应时间" width="110" align="center">
+          <template #default="{ row }">
+            <span v-if="row.response_ms != null">{{ row.response_ms }} ms</span>
+            <span v-else class="text-muted">-</span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="error" label="错误信息" min-width="200" show-overflow-tooltip>
+          <template #default="{ row }">
+            <span v-if="row.error" class="text-warn">{{ row.error }}</span>
+            <span v-else class="text-muted">-</span>
+          </template>
+        </el-table-column>
+      </el-table>
+
+      <template #footer>
+        <el-button @click="probeDialog = false">关闭</el-button>
+        <el-button type="primary" :loading="batchProbing" @click="probeAll">重新探测</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -391,7 +462,7 @@
 import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
-  ArrowDown, Download, Plus, RefreshLeft, Search, Upload, UploadFilled,
+  ArrowDown, Connection, Download, Plus, RefreshLeft, Search, Upload, UploadFilled,
 } from '@element-plus/icons-vue'
 import { deviceApi } from '../api'
 import { useUserStore } from '../store/user'
@@ -404,6 +475,11 @@ const total = ref(0)
 const loading = ref(false)
 const saving = ref(false)
 const testingId = ref(null)
+// 在线探测
+const probingId = ref(null)
+const batchProbing = ref(false)
+const probeDialog = ref(false)
+const probeResult = ref(null)
 
 const query = reactive({
   keyword: '', store_id: null, vendor: null, status: null, page: 1, page_size: 20,
@@ -528,6 +604,49 @@ async function testConn(row) {
   }
 }
 
+function fmtTime(t) {
+  return t ? t.replace('T', ' ').slice(0, 19) : '-'
+}
+
+// ---------------------------------------------------------------- 在线探测
+// 探测单台设备：轻量 SNMP 可达性判断，比「连通测试」更快，且不拉全部指标
+async function probeOne(row) {
+  probingId.value = row.id
+  try {
+    const res = await deviceApi.probe(row.id)
+    if (res.online) {
+      ElMessage.success(`「${row.name}」在线 · 响应 ${res.response_ms ?? '-'}ms`)
+    } else {
+      ElMessage.warning(`「${row.name}」离线：${res.error || '无响应'}`)
+    }
+    await load()
+  } catch (e) {
+    /* 忽略 */
+  } finally {
+    probingId.value = null
+  }
+}
+
+// 探测全部设备（后端按并发上限执行，避免打满网络）
+async function probeAll() {
+  batchProbing.value = true
+  try {
+    const res = await deviceApi.probeBatch({ concurrency: 10 })
+    probeResult.value = res
+    probeDialog.value = true
+    await load()
+    if (res.total === 0) {
+      ElMessage.warning('没有可探测的设备')
+    } else {
+      ElMessage.success(`探测完成：在线 ${res.online} 台，离线 ${res.offline} 台`)
+    }
+  } catch (e) {
+    /* 忽略 */
+  } finally {
+    batchProbing.value = false
+  }
+}
+
 // ---------------------------------------------------------------- 导入导出
 const importDialog = ref(false)
 const importStep = ref(0)
@@ -623,5 +742,31 @@ onUnmounted(() => window.removeEventListener('netops:refresh', load))
   color: var(--netops-danger);
   max-height: 140px;
   overflow-y: auto;
+}
+
+/* 在线探测结果汇总 */
+.probe-summary {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.probe-stat {
+  border: 1px solid var(--netops-border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  text-align: center;
+}
+
+.probe-stat .label {
+  font-size: 12px;
+  color: var(--netops-text-muted);
+  margin-bottom: 4px;
+}
+
+.probe-stat .value {
+  font-size: 20px;
+  font-weight: 600;
 }
 </style>

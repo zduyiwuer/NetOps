@@ -64,6 +64,8 @@ export const deviceApi = {
   remove: (id) => http.delete(`/devices/${id}`),
   collect: (id) => http.post(`/devices/${id}/collect`),
   test: (id) => http.post(`/devices/${id}/test`),
+  probe: (id) => http.post(`/devices/${id}/probe`),
+  probeBatch: (data = {}) => http.post('/devices/probe/batch', data),
   stores: () => http.get('/stores'),
   createStore: (data) => http.post('/stores', data),
   updateStore: (id, data) => http.put(`/stores/${id}`, data),
