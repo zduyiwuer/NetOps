@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.collectors.engine import rate_tracker
 from app.collectors.telemetry import (
+    PathMapping,
     TelemetryCollectorServer,
     TelemetryClientSession,
     TelemetryPathMapper,
@@ -27,6 +28,7 @@ from app.models.models import (
     DeviceMetric,
     InterfaceMetric,
     TelemetryConfig,
+    TelemetryPathMapping,
     TelemetrySample as TelemetrySampleModel,
 )
 
@@ -263,6 +265,32 @@ def resolve_device_by_peer(peer: str) -> Optional[int]:
         db.close()
 
 
+def _build_mapper(db: Session) -> TelemetryPathMapper:
+    """构造路径映射器：内置映射 + 用户自定义映射。
+
+    自定义映射让用户可以订阅厂商未适配的私有路径，
+    无需等平台适配就能拿到数据。
+    """
+    extra: List[PathMapping] = []
+    try:
+        rows = (
+            db.query(TelemetryPathMapping)
+            .filter(TelemetryPathMapping.enabled.is_(True))
+            .all()
+        )
+        for m in rows:
+            extra.append(
+                PathMapping(
+                    path=m.path,
+                    metric=m.metric,
+                    scale=m.scale or 1.0,
+                )
+            )
+    except Exception as exc:
+        logger.warning("加载自定义遥测路径失败: %s", exc)
+    return TelemetryPathMapper(extra_mappings=extra)
+
+
 # ---------------------------------------------------------------- 生命周期
 async def start_telemetry_services(gnmi_port: int = 57400) -> bool:
     """启动 gNMI collector 服务端与已启用的 client 会话。"""
@@ -271,7 +299,14 @@ async def start_telemetry_services(gnmi_port: int = 57400) -> bool:
     def on_samples(samples: List[TelemetrySample], device_id: Optional[int]) -> None:
         store_telemetry_samples(samples, device_id, source="push")
 
-    collector_server = TelemetryCollectorServer(on_samples, resolve_device_by_peer)
+    # 映射器：内置映射 + 用户自定义路径（collector 与 client 两种模式共用）
+    db = SessionLocal()
+    try:
+        mapper = _build_mapper(db)
+    finally:
+        db.close()
+
+    collector_server = TelemetryCollectorServer(on_samples, resolve_device_by_peer, mapper)
     if not await collector_server.start(gnmi_port):
         collector_server = None
         logger.warning("gNMI collector 启动失败，端口 %s 可能被占用", gnmi_port)
@@ -301,6 +336,7 @@ async def start_telemetry_services(gnmi_port: int = 57400) -> bool:
                 on_samples=on_samples,
                 username=cfg.username or "",
                 password=cfg.password or "",
+                mapper=mapper,
             )
             await session.start()
             client_sessions[cfg.device_id] = session

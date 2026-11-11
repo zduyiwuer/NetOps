@@ -92,6 +92,8 @@ export const monitorApi = {
   realtimeInterfaces: (params) => http.get('/monitor/interfaces/realtime', { params }),
   deviceInterfaces: (id) => http.get(`/monitor/devices/${id}/interfaces`),
   deviceMetrics: (id, hours = 24) => http.get(`/monitor/devices/${id}/metrics`, { params: { hours } }),
+  deviceSessions: (id, hours = 24) => http.get(`/monitor/devices/${id}/sessions`, { params: { hours } }),
+  firewallSessions: (hours = 1) => http.get('/monitor/firewalls/sessions', { params: { hours } }),
   interfaceHistory: (id, ifIndex, hours = 6) =>
     http.get(`/monitor/devices/${id}/interfaces/history`, {
       params: { if_index: ifIndex, hours },
@@ -211,6 +213,8 @@ export const netflowApi = {
 export const telemetryApi = {
   status: () => http.get('/telemetry/status'),
   paths: () => http.get('/telemetry/paths'),
+  createPath: (data) => http.post('/telemetry/paths', data),
+  deletePath: (id) => http.delete(`/telemetry/paths/${id}`),
   configs: () => http.get('/telemetry/configs'),
   createConfig: (data) => http.post('/telemetry/configs', data),
   updateConfig: (id, data) => http.put(`/telemetry/configs/${id}`, data),

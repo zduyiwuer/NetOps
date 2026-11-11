@@ -28,6 +28,7 @@ NetFlow 会话分析、gNMI 遥测、配置备份、基线巡检与自动报告�
 | 登录与权限 | JWT 登录页、**四种角色（管理员 / 操作员 / 审批员 / 只读）**、**一个用户可分配多个角色**、登录审计、操作审计 |
 | 域控对接 | LDAP / Active Directory 认证、域用户同步、AD 组 → 平台角色映射（**系统管理页在线配置**） |
 | 设备管理 | 增删改查、Excel/CSV 批量导入导出、SNMP v1/v2c/v3 与 SSH 连通性测试、**单台/全量在线探测**；支持 8 类厂商 |
+| **防火墙会话** | **各防火墙实时会话数一览与会话趋势**（ASA 连接数 / 飞塔会话数 / VPN 隧道数 / 在线用户数） |
 | 实时接口速率 | IF-MIB 64 位计数器差分、协商速率自适应、利用率计算、Down/错包标识、**按门店筛选** |
 | 资源监控 | CPU 使用率、内存使用率、设备温度、SNMP 响应时延、运行时长、历史曲线 |
 | 告警中心 | 阈值规则 + 持续时间 + 静默期 + 自动恢复；**详细告警内容（定位到具体接口）+ 门店筛选**；Webhook / 企业微信 / 钉钉 / 邮件通知 |
@@ -487,16 +488,36 @@ Cisco IOS-XR、H3C Comware、Huawei VRP 等设备的 gNMI 服务。
 | 接口状态 | `interfaces/interface/state/oper-status` |
 | CPU 使用率 | `system/cpu/state/utilization` |
 | 内存使用量 | `system/memory/state/used` |
+| **无线终端连接数** | `access-points/access-point/state/num-clients` |
+| **无线客户端 MAC** | `access-points/access-point/ssids/ssid/clients/client/state/mac-address` |
 
-映射表可在「Telemetry 遥测」页查看，也支持自定义路径。
+**无线终端连接信息**内置 16 条路径，覆盖 OpenConfig wifi 标准模型与常见厂商私有写法：
+
+| 指标 | 说明 |
+| --- | --- |
+| `wlan_client_count` | 关联终端总数（设备级） |
+| `wlan_client_mac` | 已关联终端的 MAC（接口级，每个终端一条） |
+| `wlan_client_state` | 终端连接状态 |
+| `wlan_client_conn_time` | 连接时长 |
+| `wlan_client_rx_bytes` / `tx_bytes` | 终端流量 |
+| `wlan_radio_client_count` | 单射频在线终端数 |
+| `wlan_channel_utilization` | 信道利用率 |
+
+### 自定义路径
+
+「Telemetry 遥测」页 → 可订阅路径 → **新增路径**，填写设备 gNMI 可订阅的完整路径
+（不含 origin 前缀）与平台指标名即可，无需等平台适配厂商私有模型。
+
+自定义路径会与内置映射一起生效（采集器按最长前缀优先匹配），
+并自动出现在订阅配置的可选路径里。内置 46 条 + 自定义 N 条，
+列表区分「内置 / 自定义」来源，自定义项可删除。
 
 **数据归一化**：遥测样本写入与 SNMP 采集**相同的** `device_metrics` / `interface_metrics` 表，
 因此所有既有看板直接支持遥测数据，无需区分来源。
 
 ---
 
-## 八、基线巡检与报告
-**内置模板**（共 7 套）：通用交换机、H3C/华为、Cisco、Cisco ASA 防火墙、
+## 八、基线巡检与报告**内置模板**（共 7 套）：通用交换机、H3C/华为、Cisco、Cisco ASA 防火墙、
 Cisco WLC 无线控制器、飞塔 FortiGate 防火墙、MikroTik RouterOS。
 
 **按厂商自动匹配**：巡检时平台会依据每台设备的厂商自动选用对应模板——
@@ -589,6 +610,9 @@ python -m scripts.verify_about_page     # 23 项：厂商分类与说明、类�
 
 # 18. 设备在线探测验证（需先启动后端服务）
 python -m scripts.verify_probe          # 39 项：探测服务逻辑、单设备/批量接口、探测界面
+
+# 19. 新需求验证（设备管理布局 / 遥测自定义路径 / 防火墙会话）
+python -m scripts.verify_new_features   # 28 项：表格无横向滚动、无线终端路径、自定义路径 CRUD、会话页
 ```
 
 > 容器内运行验证脚本时，需先启动服务并把 `BASE` 指向容器地址。
@@ -845,6 +869,37 @@ curl -X POST http://localhost:8900/api/devices/probe/batch \
      "online": true, "status": "online", "response_ms": 12.5, "error": ""}
   ]
 }
+```
+
+---
+
+## 九之九之二、防火墙实时会话
+
+「运维监控 → 防火墙会话」集中展示所有防火墙设备的**当前会话数**与历史趋势。
+
+### 各厂商采集的会话指标
+
+| 厂商 | 指标 | 采集方式 |
+| --- | --- | --- |
+| Cisco ASA | 当前连接数 / 并发连接峰值 / CSC 表项数 | SNMP `ciscoASAConnCount` 等，或 `show connection count` |
+| 飞塔 FortiGate | 当前会话数 / 登录用户数 / VPN 隧道数 | SNMP `fgSysSesCount` 等，或 `get system performance status` |
+
+这些指标在**设备采集时**一并获取并写入 `device_metrics.extra_metrics`，
+会话页读取该字段，因此数据随正常采集周期自动更新，无需单独轮询。
+
+### 页面内容
+
+- **汇总卡片** —— 防火墙设备数、会话总数、最高单台、离线设备数
+- **设备一览** —— 每台防火墙的当前会话/连接数、并发峰值、在线状态、采集时间
+- **会话趋势** —— 会话数随时间变化曲线（可切 6 小时 / 24 小时）
+
+设备详情页也会为防火墙设备显示会话卡片与会话趋势图。
+
+### 接口
+
+```http
+GET /api/monitor/firewalls/sessions          # 所有防火墙的当前会话数一览
+GET /api/monitor/devices/{device_id}/sessions # 单台设备的会话数与趋势
 ```
 
 ---
@@ -1183,7 +1238,7 @@ netops/
 │   ├── scripts/          14 套自动化验证脚本 + 服务管理辅助
 │   └── requirements.txt
 ├── frontend/             Vue 3 + Element Plus + ECharts
-│   └── src/views/        18 个功能页面
+│   └── src/views/        19 个功能页面
 ├── docs/screenshots/     界面截图
 ├── Dockerfile            三阶段构建
 ├── docker-compose.yml    编排配置

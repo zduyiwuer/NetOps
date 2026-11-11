@@ -82,6 +82,27 @@ DEFAULT_MAPPINGS: List[PathMapping] = [
     PathMapping("system/state/hostname", "hostname"),
     PathMapping("system/state/uptime", "uptime"),
     PathMapping("lldp/interfaces/interface/state/port-id", "lldp_port_id"),
+    # ---- 无线终端连接信息（OpenConfig wifi 标准模型）----
+    # 关联终端总数（设备级）
+    PathMapping("access-points/access-point/state/num-clients", "wlan_client_count"),
+    PathMapping("access-points/access-point/state/client-count", "wlan_client_count"),
+    # 已关联终端的 MAC / 状态（接口级，每个终端一条）
+    PathMapping("access-points/access-point/ssids/ssid/clients/client/state/mac-address", "wlan_client_mac"),
+    PathMapping("access-points/access-point/ssids/ssid/clients/client/state/associated", "wlan_client_associated"),
+    PathMapping("access-points/access-point/ssids/ssid/clients/client/state/state", "wlan_client_state"),
+    PathMapping("access-points/access-point/ssids/ssid/clients/client/state/connection-time", "wlan_client_conn_time"),
+    PathMapping("access-points/access-point/ssids/ssid/clients/client/state/rx-bytes", "wlan_client_rx_bytes"),
+    PathMapping("access-points/access-point/ssids/ssid/clients/client/state/tx-bytes", "wlan_client_tx_bytes"),
+    # 射频侧：在线终端数与信道利用率
+    PathMapping("access-points/access-point/radios/radio/state/num-clients", "wlan_radio_client_count"),
+    PathMapping("access-points/access-point/radios/radio/state/channel-utilization", "wlan_channel_utilization"),
+    # AP 侧：AP 自身在线状态与已连接终端数（厂商私有模型常见写法）
+    PathMapping("wifi/ap/state/clients", "wlan_client_count"),
+    PathMapping("wifi/client/state/mac", "wlan_client_mac"),
+    PathMapping("wlan/client/state/mac", "wlan_client_mac"),
+    PathMapping("wireless-client/state/mac-address", "wlan_client_mac"),
+    PathMapping("wireless-client/state/status", "wlan_client_state"),
+    PathMapping("wlc/client/state/client-count", "wlan_client_count"),
 ]
 
 # 数值型指标 → 单位换算（统一到平台内部单位）

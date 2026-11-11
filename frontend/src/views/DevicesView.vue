@@ -54,7 +54,30 @@
       </div>
 
       <el-table v-loading="loading" :data="items" size="small" stripe>
-        <el-table-column label="设备名称" min-width="170" fixed>
+        <!-- 展开行：位置 / 资产编号 / 序列号等低频字段放这里，避免主表格横向滚动 -->
+        <el-table-column type="expand" width="38">
+          <template #default="{ row }">
+            <div class="expand-info">
+              <div class="expand-item">
+                <span class="label">位置</span>
+                <span class="value">{{ row.location || '-' }}</span>
+              </div>
+              <div class="expand-item">
+                <span class="label">资产编号</span>
+                <span class="value mono">{{ row.asset_tag || '-' }}</span>
+              </div>
+              <div class="expand-item">
+                <span class="label">序列号</span>
+                <span class="value mono">{{ row.serial_number || '-' }}</span>
+              </div>
+              <div class="expand-item">
+                <span class="label">设备类型</span>
+                <span class="value">{{ deviceTypeText(row.device_type) }}</span>
+              </div>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column label="设备名称" min-width="150" fixed>
           <template #default="{ row }">
             <el-link type="primary" :underline="false" @click="$router.push(`/device/${row.id}`)">
               {{ row.name }}
@@ -65,15 +88,14 @@
           </template>
         </el-table-column>
         <el-table-column prop="ip" label="管理IP" width="130" class-name="mono" />
-        <el-table-column label="厂商" width="130">
+        <el-table-column label="厂商" width="120">
           <template #default="{ row }">
             <el-tag size="small" effect="plain" :type="vendorTagType(row.vendor)">{{ row.vendor_label || row.vendor }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="model" label="型号" width="150" show-overflow-tooltip />
-        <el-table-column prop="store_name" label="门店" width="120" show-overflow-tooltip />
-        <el-table-column prop="location" label="位置" width="150" show-overflow-tooltip />
-        <el-table-column label="采集通道" width="150">
+        <el-table-column prop="model" label="型号" width="130" show-overflow-tooltip />
+        <el-table-column prop="store_name" label="门店" width="110" show-overflow-tooltip />
+        <el-table-column label="采集通道" width="140">
           <template #default="{ row }">
             <el-tag v-if="row.use_snmp" size="small" effect="plain" style="margin: 1px">SNMP</el-tag>
             <el-tag v-if="row.use_telemetry" size="small" effect="plain" type="success" style="margin: 1px">
@@ -85,7 +107,7 @@
             <span v-if="!row.use_snmp && !row.use_telemetry && !row.use_netflow" class="text-muted">未启用</span>
           </template>
         </el-table-column>
-        <el-table-column label="状态" width="140" align="center">
+        <el-table-column label="状态" width="130" align="center">
           <template #default="{ row }">
             <el-tooltip :content="row.last_seen ? `最后在线：${fmtTime(row.last_seen)}` : '尚无探测记录'" placement="top">
               <el-tag :type="statusType(row.status)" size="small" effect="dark">
@@ -104,16 +126,14 @@
             </el-button>
           </template>
         </el-table-column>
-        <el-table-column prop="asset_tag" label="资产编号" width="130" class-name="mono" />
-        <el-table-column prop="serial_number" label="序列号" width="150" class-name="mono" show-overflow-tooltip />
-        <el-table-column label="采集" width="80" align="center">
+        <el-table-column label="采集" width="70" align="center">
           <template #default="{ row }">
             <el-tag :type="row.enabled ? 'success' : 'info'" size="small" effect="plain">
               {{ row.enabled ? '启用' : '停用' }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="170" fixed="right">
+        <el-table-column label="操作" width="160" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" size="small" @click="$router.push(`/device/${row.id}`)">详情</el-button>
             <el-button link type="primary" size="small" :loading="testingId === row.id" @click="testConn(row)">
@@ -512,6 +532,15 @@ function statusText(s) {
 function vendorTagType(v) {
   return { h3c: 'warning', huawei: 'danger', cisco: 'primary', routeros: 'success' }[v] || 'info'
 }
+function deviceTypeText(t) {
+  return {
+    switch: '交换机',
+    router: '路由器',
+    firewall: '防火墙',
+    ap: '无线 AP',
+    wlc: '无线控制器',
+  }[t] || t || '-'
+}
 
 async function load() {
   loading.value = true
@@ -742,6 +771,29 @@ onUnmounted(() => window.removeEventListener('netops:refresh', load))
   color: var(--netops-danger);
   max-height: 140px;
   overflow-y: auto;
+}
+
+/* 展开行的附加信息（位置 / 资产编号 / 序列号 / 设备类型） */
+.expand-info {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 28px;
+  padding: 6px 14px 8px 52px;
+}
+
+.expand-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.expand-item .label {
+  color: var(--netops-text-muted);
+}
+
+.expand-item .value {
+  color: var(--netops-text);
 }
 
 /* 在线探测结果汇总 */

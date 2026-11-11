@@ -39,6 +39,27 @@
           <span v-if="ifaceStatus !== 'all'"> · 当前显示 {{ filteredInterfaces.length }}</span>
         </div>
       </div>
+      <!-- 防火墙实时会话数 -->
+      <div v-if="isFirewall" class="stat-card">
+        <div class="label"><el-icon><Connection /></el-icon>{{ sessionLabel }}</div>
+        <div class="value" style="font-size: 20px">
+          {{ sessions.current != null ? sessions.current : '-' }}
+        </div>
+        <div class="foot">
+          <span v-if="sessions.latest?.conn_peak != null">
+            峰值 {{ sessions.latest.conn_peak }} ·
+          </span>
+          <span v-if="sessions.latest?.user_count != null">
+            用户 {{ sessions.latest.user_count }} ·
+          </span>
+          <span v-if="sessions.latest?.vpn_tunnel_count != null">
+            VPN 隧道 {{ sessions.latest.vpn_tunnel_count }}
+          </span>
+          <span v-if="!sessions.latest || !Object.keys(sessions.latest).length">
+            暂无会话数据
+          </span>
+        </div>
+      </div>
     </div>
 
     <div class="gap-row" style="margin-top: 12px">
@@ -57,6 +78,14 @@
       <div class="chart-card" style="flex: 1; min-width: 420px">
         <div class="card-title">接口流量速率（Top 8）</div>
         <BaseChart :option="ifaceOption" height="280px" />
+      </div>
+      <!-- 防火墙会话趋势 -->
+      <div v-if="isFirewall" class="chart-card" style="flex: 1; min-width: 420px">
+        <div class="card-title">
+          <span>防火墙会话趋势</span>
+          <span class="text-muted" style="font-size: 12px">{{ sessionLabel }}</span>
+        </div>
+        <BaseChart :option="sessionOption" height="280px" />
       </div>
     </div>
 
@@ -143,7 +172,7 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Back, Cpu, FolderOpened, Refresh, Search } from '@element-plus/icons-vue'
+import { Back, Connection, Cpu, FolderOpened, Refresh, Search } from '@element-plus/icons-vue'
 import BaseChart from '../components/BaseChart.vue'
 import { backupApi, deviceApi, monitorApi } from '../api'
 import { useUserStore } from '../store/user'
@@ -237,10 +266,13 @@ async function loadMetrics() {
   } catch (e) {
     metrics.value = []
   }
+  await loadSessions()
 }
 
 async function loadAll() {
-  await Promise.all([loadDevice(), loadInterfaces(), loadMetrics()])
+  // 先加载设备信息——会话数据依赖 device.vendor 判断是否为防火墙
+  await loadDevice()
+  await Promise.all([loadInterfaces(), loadMetrics()])
 }
 
 async function collect() {
@@ -292,6 +324,57 @@ const metricOption = computed(() => {
       { name: 'CPU', type: 'line', smooth: true, showSymbol: false, data: metrics.value.map((m) => m.cpu_usage) },
       { name: '内存', type: 'line', smooth: true, showSymbol: false, data: metrics.value.map((m) => m.mem_usage) },
     ],
+  }
+})
+
+// ---------------------------------------------------------------- 防火墙会话
+const sessions = ref({ current: null, latest: {}, items: [] })
+// ASA 用连接数、飞塔用会话数，其余厂商不展示
+const FIREWALL_VENDORS = ['cisco_asa', 'fortinet']
+const isFirewall = computed(() => FIREWALL_VENDORS.includes(device.value?.vendor))
+const sessionLabel = computed(() => {
+  if (device.value?.vendor === 'cisco_asa') return '当前连接数'
+  if (device.value?.vendor === 'fortinet') return '当前会话数'
+  return '会话数'
+})
+
+async function loadSessions() {
+  if (!isFirewall.value) return
+  try {
+    const res = await monitorApi.deviceSessions(deviceId.value, hours.value)
+    sessions.value = res || { current: null, latest: {}, items: [] }
+  } catch (e) {
+    sessions.value = { current: null, latest: {}, items: [] }
+  }
+}
+
+const SESSION_SERIES = [
+  { key: 'conn_count', label: '连接数', color: '#f59e0b' },
+  { key: 'session_count', label: '会话数', color: '#f59e0b' },
+  { key: 'conn_peak', label: '并发峰值', color: '#ef4444' },
+  { key: 'user_count', label: '登录用户', color: '#8b5cf6' },
+  { key: 'vpn_tunnel_count', label: 'VPN 隧道', color: '#10b981' },
+]
+
+const sessionOption = computed(() => {
+  const items = sessions.value.items || []
+  const times = items.map((p) => p.ts.replace('T', ' ').slice(5, 16))
+  // 只画本次数据里实际出现过的指标
+  const series = SESSION_SERIES.filter((s) => items.some((p) => p[s.key] != null)).map((s) => ({
+    name: s.label,
+    type: 'line',
+    smooth: true,
+    showSymbol: false,
+    itemStyle: { color: s.color },
+    data: items.map((p) => p[s.key] ?? null),
+  }))
+  return {
+    tooltip: { trigger: 'axis' },
+    legend: { data: series.map((s) => s.name), right: 0, textStyle: AXIS },
+    grid: { left: 52, right: 20, top: 32, bottom: 28 },
+    xAxis: { type: 'category', data: times, axisLabel: AXIS, axisLine: { lineStyle: { color: '#e5e7eb' } } },
+    yAxis: { type: 'value', axisLabel: AXIS, splitLine: SPLIT },
+    series,
   }
 })
 

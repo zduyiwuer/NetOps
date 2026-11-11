@@ -19,6 +19,7 @@ from app.models.models import (
     FlowRecord,
     Store,
     TelemetryConfig,
+    TelemetryPathMapping,
     TelemetrySample,
     User,
 )
@@ -221,17 +222,126 @@ def status(_: User = Depends(get_current_user)) -> Dict[str, Any]:
     return telemetry_status()
 
 
+def _custom_mappings(db: Session) -> List[TelemetryPathMapping]:
+    """已启用的自定义路径映射。"""
+    return (
+        db.query(TelemetryPathMapping)
+        .filter(TelemetryPathMapping.enabled.is_(True))
+        .order_by(TelemetryPathMapping.id)
+        .all()
+    )
+
+
+def _mapping_rows(db: Session) -> List[Dict[str, Any]]:
+    """内置映射 + 自定义映射，统一成一份列表。"""
+    rows: List[Dict[str, Any]] = [
+        {
+            "path": m.path,
+            "metric": m.metric,
+            "per_interface": m.metric.startswith("if_"),
+            "source": "builtin",
+            "description": "",
+            "id": None,
+        }
+        for m in DEFAULT_MAPPINGS
+    ]
+    for m in _custom_mappings(db):
+        rows.append(
+            {
+                "path": m.path,
+                "metric": m.metric,
+                "per_interface": m.per_interface,
+                "source": "custom",
+                "description": m.description,
+                "id": m.id,
+            }
+        )
+    return rows
+
+
 @telemetry_router.get("/paths")
-def list_paths(_: User = Depends(get_current_user)) -> Dict[str, Any]:
-    """可订阅的遥测路径（内置映射表）。"""
-    mapper = TelemetryPathMapper()
+def list_paths(db: Session = Depends(get_db), _: User = Depends(get_current_user)) -> Dict[str, Any]:
+    """可订阅的遥测路径（内置映射表 + 用户自定义映射）。"""
+    rows = _mapping_rows(db)
     return {
-        "items": [
-            {"path": m.path, "metric": m.metric, "per_interface": m.metric.startswith("if_")}
-            for m in DEFAULT_MAPPINGS
-        ],
-        "total": len(mapper.all_paths()),
+        "items": rows,
+        "total": len(rows),
+        "builtin_total": len(DEFAULT_MAPPINGS),
+        "custom_total": len(rows) - len(DEFAULT_MAPPINGS),
     }
+
+
+class PathMappingIn(BaseModel):
+    """自定义遥测路径映射。"""
+
+    path: str = Field(min_length=1, max_length=512)
+    metric: str = Field(min_length=1, max_length=48)
+    description: str = Field(default="", max_length=255)
+    per_interface: bool = False
+    scale: float = 1.0
+    enabled: bool = True
+
+
+@telemetry_router.post("/paths")
+def create_path_mapping(
+    payload: PathMappingIn,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_operator),
+) -> Dict[str, Any]:
+    """新增自定义遥测路径映射。
+
+    厂商私有模型路径不统一，用户可以把自己知道的路径加进来订阅，
+    无需等平台适配。
+    """
+    path = payload.path.strip()
+    if not path:
+        raise HTTPException(status_code=400, detail="路径不能为空")
+    exists = (
+        db.query(TelemetryPathMapping)
+        .filter(TelemetryPathMapping.path == path)
+        .first()
+    )
+    if exists:
+        raise HTTPException(status_code=400, detail="该路径已存在")
+    dup_builtin = next((m for m in DEFAULT_MAPPINGS if m.path == path), None)
+    if dup_builtin:
+        raise HTTPException(status_code=400, detail="该路径已在内置映射表中")
+    row = TelemetryPathMapping(
+        path=path,
+        metric=payload.metric.strip(),
+        description=payload.description.strip(),
+        per_interface=payload.per_interface,
+        scale=payload.scale,
+        enabled=payload.enabled,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return {
+        "id": row.id,
+        "path": row.path,
+        "metric": row.metric,
+        "description": row.description,
+        "per_interface": row.per_interface,
+        "scale": row.scale,
+        "enabled": row.enabled,
+        "source": "custom",
+    }
+
+
+@telemetry_router.delete("/paths/{mapping_id}")
+def delete_path_mapping(
+    mapping_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+) -> Dict[str, Any]:
+    """删除自定义路径映射。"""
+    row = db.get(TelemetryPathMapping, mapping_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="映射不存在")
+    db.delete(row)
+    db.commit()
+    return {"ok": True}
 
 
 @telemetry_router.get("/configs")

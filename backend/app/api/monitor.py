@@ -1,13 +1,15 @@
 """监控 API：总览、实时接口速率、CPU/内存曲线、流量 TopN。"""
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.collectors.vendors import VENDORS
 from app.core.security import get_current_user
 from app.db.session import get_db
 from app.models.models import (
@@ -26,7 +28,7 @@ router = APIRouter(prefix="/api/monitor", tags=["监控"])
 def _ip_metrics(m: Optional[DeviceMetric]) -> Dict[str, Any]:
     if not m:
         return {}
-    return {
+    out: Dict[str, Any] = {
         "cpu_usage": m.cpu_usage,
         "mem_usage": m.mem_usage,
         "mem_total_mb": m.mem_total_mb,
@@ -36,6 +38,22 @@ def _ip_metrics(m: Optional[DeviceMetric]) -> Dict[str, Any]:
         "reachability": m.reachability,
         "ts": m.ts.isoformat(),
     }
+    # 厂商专属指标（防火墙会话数、无线客户端数等）
+    extra = _parse_extra(m.extra_metrics)
+    if extra:
+        out["extra"] = extra
+    return out
+
+
+def _parse_extra(raw: Optional[str]) -> Dict[str, Any]:
+    """解析指标行里的厂商专属指标 JSON。"""
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+    except (TypeError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
 @router.get("/overview")
@@ -307,6 +325,116 @@ def device_metrics(
         "device_id": device_id,
         "hours": hours,
     }
+
+
+# 各防火墙厂商的「会话数」专属指标名 → 友好名称
+SESSION_METRICS = {
+    "conn_count": "当前连接数",
+    "session_count": "当前会话数",
+    "conn_peak": "并发连接峰值",
+    "user_count": "登录用户数",
+    "vpn_tunnel_count": "VPN 隧道数",
+    "csc_table_size": "CSC 表项数",
+}
+# 视为防火墙的厂商
+FIREWALL_VENDORS = {"cisco_asa", "fortinet"}
+
+
+@router.get("/devices/{device_id}/sessions")
+def device_sessions(
+    device_id: int,
+    hours: int = Query(24, ge=1, le=720),
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """防火墙实时会话数与历史趋势。
+
+    会话数来自采集时写入的厂商专属指标（extra_metrics）：
+    - Cisco ASA：当前连接数 / 并发连接峰值 / CSC 表项数
+    - 飞塔 FortiGate：当前会话数 / 登录用户数 / VPN 隧道数
+    """
+    device = db.get(Device, device_id)
+    if device is None:
+        raise HTTPException(status_code=404, detail="设备不存在")
+
+    since = datetime.now() - timedelta(hours=hours)
+    rows = (
+        db.query(DeviceMetric)
+        .filter(DeviceMetric.device_id == device_id, DeviceMetric.ts >= since)
+        .order_by(DeviceMetric.ts)
+        .all()
+    )
+
+    series: List[Dict[str, Any]] = []
+    latest: Dict[str, Any] = {}
+    for m in rows:
+        extra = _parse_extra(m.extra_metrics)
+        if not extra:
+            continue
+        point = {"ts": m.ts.isoformat()}
+        for key, label in SESSION_METRICS.items():
+            if key in extra:
+                point[key] = extra[key]
+        if len(point) > 1:
+            series.append(point)
+            latest = point
+
+    # 「会话数」主指标：ASA 用连接数，飞塔用会话数
+    primary_key = "conn_count" if device.vendor == "cisco_asa" else "session_count"
+    primary = latest.get(primary_key)
+
+    return {
+        "device_id": device_id,
+        "is_firewall": device.vendor in FIREWALL_VENDORS,
+        "primary_key": primary_key,
+        "primary_label": SESSION_METRICS.get(primary_key, "会话数"),
+        "current": primary,
+        "latest": latest,
+        "items": series,
+        "total": len(series),
+        "hours": hours,
+    }
+
+
+@router.get("/firewalls/sessions")
+def firewall_sessions_overview(
+    hours: int = Query(1, ge=1, le=720),
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """所有防火墙设备的当前会话数一览。"""
+    devices = (
+        db.query(Device)
+        .filter(Device.vendor.in_(FIREWALL_VENDORS), Device.enabled.is_(True))
+        .order_by(Device.id)
+        .all()
+    )
+    items: List[Dict[str, Any]] = []
+    for d in devices:
+        row = (
+            db.query(DeviceMetric)
+            .filter(DeviceMetric.device_id == d.id)
+            .order_by(DeviceMetric.ts.desc())
+            .first()
+        )
+        extra = _parse_extra(row.extra_metrics) if row else {}
+        primary_key = "conn_count" if d.vendor == "cisco_asa" else "session_count"
+        items.append(
+            {
+                "device_id": d.id,
+                "name": d.name,
+                "ip": d.ip,
+                "vendor": d.vendor,
+                "vendor_label": VENDORS.get(d.vendor).label if d.vendor in VENDORS else d.vendor,
+                "status": d.status,
+                "metric_key": primary_key,
+                "metric_label": SESSION_METRICS.get(primary_key, "会话数"),
+                "value": extra.get(primary_key),
+                "peak": extra.get("conn_peak"),
+                "ts": row.ts.isoformat() if row else None,
+            }
+        )
+    return {"items": items, "total": len(items), "hours": hours}
 
 
 @router.get("/devices/{device_id}/interfaces/history")

@@ -111,6 +111,12 @@ const routes = [
         meta: { title: '设备接入', icon: 'Key', group: 'ops' },
       },
       {
+        path: 'firewall-sessions',
+        name: 'firewall-sessions',
+        component: () => import('../views/FirewallSessionsView.vue'),
+        meta: { title: '防火墙会话', icon: 'Share', group: 'ops' },
+      },
+      {
         path: 'stores',
         name: 'stores',
         component: () => import('../views/StoresView.vue'),

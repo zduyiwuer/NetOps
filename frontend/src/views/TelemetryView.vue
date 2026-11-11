@@ -117,15 +117,70 @@
 
     <div class="gap-row" style="margin-top: 12px">
       <div class="table-card" style="flex: 1; min-width: 420px">
-        <div class="card-title">可订阅路径（内置映射表）</div>
-        <el-table :data="paths" size="small" stripe max-height="360">
-          <el-table-column prop="path" label="遥测路径" min-width="280" class-name="mono" show-overflow-tooltip />
-          <el-table-column prop="metric" label="平台指标" width="140" class-name="mono" />
+        <div class="card-title">
+          <span>可订阅路径</span>
+          <span class="text-muted" style="font-size: 12px">
+            内置 {{ pathCounts.builtin }} 条 · 自定义 {{ pathCounts.custom }} 条
+          </span>
+          <el-input
+            v-model="pathKeyword"
+            placeholder="搜索路径 / 指标"
+            clearable
+            size="small"
+            style="width: 170px; margin-left: 10px"
+            :prefix-icon="Search"
+          />
+          <el-select
+            v-model="pathCategory"
+            placeholder="全部分类"
+            clearable
+            size="small"
+            style="width: 120px; margin-left: 8px"
+          >
+            <el-option label="无线终端" value="wlan" />
+            <el-option label="接口" value="iface" />
+            <el-option label="系统" value="system" />
+            <el-option label="自定义" value="custom" />
+          </el-select>
+          <el-button
+            v-if="userStore.canOperate"
+            size="small"
+            type="primary"
+            :icon="Plus"
+            style="margin-left: 8px"
+            @click="openPathDialog()"
+          >
+            新增路径
+          </el-button>
+        </div>
+        <el-table :data="filteredPaths" size="small" stripe max-height="360">
+          <el-table-column prop="path" label="遥测路径" min-width="260" class-name="mono" show-overflow-tooltip />
+          <el-table-column prop="metric" label="平台指标" width="130" class-name="mono" show-overflow-tooltip />
           <el-table-column label="类型" width="90" align="center">
             <template #default="{ row }">
               <el-tag size="small" effect="plain" :type="row.per_interface ? 'warning' : 'info'">
                 {{ row.per_interface ? '接口级' : '设备级' }}
               </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="来源" width="80" align="center">
+            <template #default="{ row }">
+              <el-tag size="small" effect="plain" :type="row.source === 'custom' ? 'success' : 'info'">
+                {{ row.source === 'custom' ? '自定义' : '内置' }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="操作" width="70" align="center">
+            <template #default="{ row }">
+              <el-button
+                v-if="row.source === 'custom' && userStore.isAdmin"
+                link
+                type="danger"
+                size="small"
+                @click="removePath(row)"
+              >
+                删除
+              </el-button>
             </template>
           </el-table-column>
         </el-table>
@@ -213,13 +268,48 @@
         <el-button type="primary" :loading="saving" @click="saveConfig">保存</el-button>
       </template>
     </el-dialog>
+
+    <!-- 新增自定义遥测路径 -->
+    <el-dialog v-model="pathDialog" title="新增自定义遥测路径" width="560px">
+      <el-form ref="pathFormRef" :model="pathForm" :rules="pathRules" label-width="90px" size="small">
+        <el-form-item label="遥测路径" prop="path">
+          <el-input
+            v-model="pathForm.path"
+            placeholder="如 access-points/access-point/state/num-clients"
+            class="mono"
+          />
+          <div class="form-tip">填写设备 gNMI 可订阅的完整路径（不含 origin 前缀）</div>
+        </el-form-item>
+        <el-form-item label="平台指标" prop="metric">
+          <el-input v-model="pathForm.metric" placeholder="如 wlan_client_count" class="mono" />
+          <div class="form-tip">采集到的值会归一化到该指标名，写入设备指标表</div>
+        </el-form-item>
+        <el-form-item label="说明">
+          <el-input v-model="pathForm.description" placeholder="这条路径采集什么（可选）" />
+        </el-form-item>
+        <el-form-item label="接口级">
+          <el-switch v-model="pathForm.per_interface" />
+          <span class="form-tip" style="margin-left: 10px">按接口/客户端维度分别采集</span>
+        </el-form-item>
+        <el-form-item label="数值缩放">
+          <el-input-number v-model="pathForm.scale" :step="0.01" :precision="4" />
+          <span class="form-tip" style="margin-left: 10px">
+            千分之一等比例时填 0.001；不缩放填 1
+          </span>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="pathDialog = false">取消</el-button>
+        <el-button type="primary" :loading="pathSaving" @click="savePath">保存</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
 import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Connection, DataLine, List, Monitor, Plus, Refresh } from '@element-plus/icons-vue'
+import { Connection, DataLine, List, Monitor, Plus, Refresh, Search } from '@element-plus/icons-vue'
 import DeviceSelect from '../components/DeviceSelect.vue'
 import { telemetryApi } from '../api'
 import { useUserStore } from '../store/user'
@@ -232,8 +322,51 @@ const samples = ref([])
 const sampleMetric = ref(null)
 const saving = ref(false)
 
+// 路径筛选
+const pathKeyword = ref('')
+const pathCategory = ref('')
+
+// 自定义路径对话框
+const pathDialog = ref(false)
+const pathSaving = ref(false)
+const pathFormRef = ref()
+const pathForm = reactive({
+  path: '', metric: '', description: '', per_interface: false, scale: 1,
+})
+const pathRules = {
+  path: [{ required: true, message: '请输入遥测路径', trigger: 'blur' }],
+  metric: [{ required: true, message: '请输入平台指标名', trigger: 'blur' }],
+}
+
 const configDialog = ref(false)
 const configForm = reactive({})
+
+// 内置 / 自定义路径计数
+const pathCounts = computed(() => ({
+  builtin: paths.value.filter((p) => p.source !== 'custom').length,
+  custom: paths.value.filter((p) => p.source === 'custom').length,
+}))
+
+// 无线终端相关路径的识别（用于分类筛选）
+function isWlanPath(p) {
+  return /wlan|wifi|wireless|access-point|client/i.test(`${p.path} ${p.metric}`)
+}
+
+// 按关键字与分类筛选路径
+const filteredPaths = computed(() => {
+  const kw = pathKeyword.value.trim().toLowerCase()
+  return paths.value.filter((p) => {
+    if (kw && !`${p.path} ${p.metric}`.toLowerCase().includes(kw)) return false
+    if (!pathCategory.value) return true
+    if (pathCategory.value === 'custom') return p.source === 'custom'
+    if (pathCategory.value === 'wlan') return isWlanPath(p)
+    if (pathCategory.value === 'iface') return p.per_interface || /^if_/.test(p.metric)
+    if (pathCategory.value === 'system') {
+      return !p.per_interface && !/^if_/.test(p.metric) && !isWlanPath(p)
+    }
+    return true
+  })
+})
 
 const metricOptions = [
   'cpu_usage', 'mem_used', 'mem_available', 'mem_free', 'mem_total',
@@ -346,6 +479,51 @@ async function removeConfig(row) {
     await telemetryApi.deleteConfig(row.id)
     ElMessage.success('已删除')
     reload()
+  } catch (e) {
+    /* 取消 */
+  }
+}
+
+// ---------------------------------------------------------------- 自定义路径
+function openPathDialog() {
+  Object.assign(pathForm, {
+    path: '', metric: '', description: '', per_interface: false, scale: 1,
+  })
+  pathDialog.value = true
+}
+
+async function savePath() {
+  const ok = await pathFormRef.value?.validate().catch(() => false)
+  if (!ok) return
+  pathSaving.value = true
+  try {
+    await telemetryApi.createPath({
+      path: pathForm.path.trim(),
+      metric: pathForm.metric.trim(),
+      description: pathForm.description.trim(),
+      per_interface: pathForm.per_interface,
+      scale: pathForm.scale,
+    })
+    ElMessage.success('已添加，可在下方的订阅路径中选择')
+    pathDialog.value = false
+    await loadPaths()
+  } catch (e) {
+    /* 忽略 */
+  } finally {
+    pathSaving.value = false
+  }
+}
+
+async function removePath(row) {
+  try {
+    await ElMessageBox.confirm(
+      `确定删除路径「${row.path}」吗？已使用该路径的订阅配置需要重新选择。`,
+      '提示',
+      { type: 'warning' },
+    )
+    await telemetryApi.deletePath(row.id)
+    ElMessage.success('已删除')
+    await loadPaths()
   } catch (e) {
     /* 取消 */
   }

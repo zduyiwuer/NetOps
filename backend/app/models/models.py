@@ -632,6 +632,29 @@ class TelemetryConfig(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
+class TelemetryPathMapping(Base):
+    """用户自定义的遥测路径映射。
+
+    内置映射表（app/collectors/telemetry.py 的 DEFAULT_MAPPINGS）覆盖
+    OpenConfig 标准模型与主流厂商私有模型；本表用于补充厂商未适配、
+    但用户自己知道路径的设备（如无线终端、专有控制器）。
+    """
+
+    __tablename__ = "telemetry_path_mappings"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    path: Mapped[str] = mapped_column(String(512), index=True)
+    metric: Mapped[str] = mapped_column(String(48), default="")
+    # 说明：该路径采集的是什么
+    description: Mapped[str] = mapped_column(String(255), default="")
+    # 设备级 / 接口级（接口级指标以 if_ 开头）
+    per_interface: Mapped[bool] = mapped_column(Boolean, default=False)
+    # 数值缩放（千分之一 → 实际值）
+    scale: Mapped[float] = mapped_column(Float, default=1.0)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+
 class TelemetrySample(Base):
     """遥测样本审计记录（保留原始路径，便于排障）。"""
 
