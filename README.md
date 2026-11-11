@@ -170,10 +170,19 @@ cd ../backend && python -m uvicorn app.main:app --host 0.0.0.0 --port 8900
 不想一直开着终端？用随项目提供的启停脚本，服务会在后台常驻，
 **关闭终端 / 退出 SSH 后依然继续运行**。
 
-> **Windows 上是怎么做到的**：用 WMI（`Win32_Process.Create`）创建后台进程——
+> **Windows 上是怎么做到的**：用 WMI（`Win32_Process.Create`）直接创建
+> `service_launcher.py`——**不经过 cmd 包装**。
 > 进程由系统服务托管，**不属于启动它的终端 / 脚本 / 工具的进程树**，
-> 因此父进程一退出也不受影响。Linux / macOS 上则用 `start_new_session`
-> 创建独立会话。两种方式都会把 PID 写进 `backend/data/run/netops.pid`。
+> 因此父进程一退出也不受影响。
+>
+> 为什么不走 `cmd /c "python ..."`：那样会在桌面留下一个**可见的 cmd 窗口**
+> （输出虽重定向到日志，窗口本身仍在），而且真正的服务进程是 cmd 的直接子进程——
+> 用户关掉那个窗口，服务就跟着停了。
+> 现在由启动器以 `DETACHED_PROCESS | CREATE_NO_WINDOW` 拉起服务进程后立即退出，
+> 于是**既没有多余窗口，服务也彻底脱离进程树**。
+>
+> Linux / macOS 上则用 `start_new_session` 创建独立会话。
+> 两种方式都会把 PID 写进 `backend/data/run/netops.pid`。
 
 | 操作 | Linux / macOS | Windows |
 | --- | --- | --- |
@@ -328,8 +337,18 @@ AP 数用于确认**AP 是否掉线**（关联数骤降但客户端数不变，�
 | 特有指标 | **并发会话数**、**登录用户数**、**VPN 隧道数** |
 | 基线巡检 | 「飞塔 FortiGate 防火墙基线巡检」8 项：CPU/内存/可达性 + 会话数 + VPN 隧道数 + Down 接口 + 利用率 + 运行时长 |
 
-飞塔的会话数是**并发会话容量**的核心指标（超限会直接丢新连接），
-通过 `fgSysSesCount` 采集，SSH 兜底解析 `get system performance status` 中的 `Current sessions`。
+飞塔的会话数是**并发会话容量**的核心指标（超限会直接丢新连接），通过 `fgSysSesCount` 采集，SSH 兜底解析 `get system performance status` 中的 `Current sessions`。
+
+> **为什么飞塔的内存/CPU 常要走 SSH**：
+> 多数 FortiGate 的 SNMP 只暴露接口 MIB，FORTINET-MIB 里的
+> `fgSysMemTotal` / `fgSysMemUsage` / `fgSysCpuUtilization` 并不可用
+> （返回 `No Such Object`）。此时平台会自动改用 SSH 执行
+> `get system performance status`，解析其中的
+> `Memory: 8171404k total, 2913948k used (35.7%)` 与
+> `CPU states: 5% user 2% system 0% nice 93% idle`。
+>
+> 触发条件是「SNMP 采到了但关键指标缺失」——SNMP 部分可用时不会整体失败，
+> 所以不能只靠异常兜底，必须逐项判断。
 
 > **别名自动归一化**：填 `asa` / `pix` 识别为 Cisco ASA；`wlc` / `aireos` 识别为 Cisco WLC；
 > `fortigate` / `fortios` / `飞塔` 识别为 Fortinet。
@@ -613,6 +632,9 @@ python -m scripts.verify_probe          # 39 项：探测服务逻辑、单设�
 
 # 19. 新需求验证（设备管理布局 / 遥测自定义路径 / 防火墙会话）
 python -m scripts.verify_new_features   # 28 项：表格无横向滚动、无线终端路径、自定义路径 CRUD、会话页
+
+# 20. 启动窗口与飞塔内存采集验证（需先启动后端服务）
+python -m scripts.verify_startup_and_fg_mem  # 15 项：无 cmd 窗口残留、关窗后服务存活、飞塔内存/CPU 解析
 ```
 
 > 容器内运行验证脚本时，需先启动服务并把 `BASE` 指向容器地址。

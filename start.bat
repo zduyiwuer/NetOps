@@ -171,15 +171,7 @@ popd
 goto :finish
 
 :finish
-REM ---- 收尾：双击运行时暂停，避免窗口一闪而过 ----
-if defined NETOPS_NO_PAUSE exit /b %ERRORLEVEL%
-echo.
-echo 按任意键关闭此窗口...
-pause >nul
-goto :finish
-
-:finish
-REM ---- 收尾：双击运行时暂停，避免窗口一闪而过 ----
+REM ---- 收尾：双击运行时暂停一次，避免窗口一闪而过 ----
 if defined NETOPS_NO_PAUSE exit /b %ERRORLEVEL%
 echo.
 echo 按任意键关闭此窗口...

@@ -207,37 +207,81 @@ def _spawn_via_wmi(cmd: list[str], cwd: str, log_file: str) -> int:
     WMI 由系统服务托管，创建的进程不属于调用方的作业对象/会话，
     因此父进程（终端、脚本、工具）退出都不会带走它。
 
+    **不经过 cmd 包装**：``cmd /c "python ..."`` 会在桌面留下一个可见的
+    cmd 窗口（输出虽重定向到日志，窗口本身仍在），而且真正的服务进程是
+    cmd 的直接子进程——用户关掉那个窗口，服务就跟着停了。
+
+    这里改为直接创建 ``service_launcher.py``：
+    启动器再以 DETACHED_PROCESS | CREATE_NO_WINDOW 拉起真正的服务进程，
+    自己立即退出。于是既没有多余窗口，服务进程也彻底脱离进程树。
+
     注意：WMI 启动的进程环境是**系统 PATH**，可能与当前解释器不同
     （例如当前用的是虚拟环境里的 python，WMI 却找到系统 python）。
-    因此这里把解释器换成当前正在运行的这个绝对路径，
-    并让 cmd 以 UTF-8 代码页运行，避免中文日志乱码。
+    因此这里把解释器换成当前正在运行的这个绝对路径。
     """
     try:
+        import json
+        import tempfile
+
         # 解释器换成绝对路径，确保用的是当前这个（依赖已装好的）
         parts = list(cmd)
         if parts and os.path.basename(parts[0]).lower().startswith("python"):
             parts[0] = sys.executable
 
-        inner = " ".join(_quote_win(part) for part in parts)
-        command_line = (
-            f'cmd /c "chcp 65001 >nul && cd /d {_quote_win(cwd)} && {inner} '
-            f'>> {_quote_win(log_file)} 2>&1"'
+        launcher = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "service_launcher.py"
         )
-        ps = (
-            "Invoke-CimMethod -ClassName Win32_Process -MethodName Create "
-            f"-Arguments @{{CommandLine='{_escape_ps(command_line)}'}} "
-            "| Select-Object -ExpandProperty ProcessId"
-        )
-        r = subprocess.run(
-            ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
-            capture_output=True, timeout=60,
-        )
-        out = (r.stdout or b"").decode("utf-8", errors="replace").strip()
-        for line in out.splitlines():
-            line = line.strip()
-            if line.isdigit():
-                return int(line)
-        return 0
+        if not os.path.exists(launcher):
+            return 0
+
+        # 用临时文件传参，避免命令行引号地狱
+        fd, spec_path = tempfile.mkstemp(suffix=".json", prefix="netops_spawn_")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                json.dump(
+                    {
+                        "cwd": cwd,
+                        "log": log_file,
+                        "pidfile": spec_path + ".pid",
+                        "args": parts,
+                    },
+                    fh,
+                )
+            command_line = f'"{sys.executable}" "{launcher}" "{spec_path}"'
+            ps = (
+                "Invoke-CimMethod -ClassName Win32_Process -MethodName Create "
+                f"-Arguments @{{CommandLine='{_escape_ps(command_line)}'}} "
+                "| Select-Object -ExpandProperty ProcessId"
+            )
+            r = subprocess.run(
+                ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
+                capture_output=True, timeout=60,
+            )
+            out = (r.stdout or b"").decode("utf-8", errors="replace").strip()
+            pid = 0
+            for line in out.splitlines():
+                line = line.strip()
+                if line.isdigit():
+                    pid = int(line)
+                    break
+            if not pid:
+                return 0
+
+            # 启动器会立刻退出，等它退出后再回收临时文件
+            import time
+
+            for _ in range(20):
+                if not pid_alive(pid):
+                    break
+                time.sleep(0.1)
+            return pid
+        finally:
+            for p in (spec_path, spec_path + ".pid"):
+                try:
+                    if os.path.exists(p):
+                        os.remove(p)
+                except OSError:
+                    pass
     except Exception:
         return 0
 

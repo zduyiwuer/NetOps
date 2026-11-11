@@ -293,6 +293,17 @@ def parse_cpu_usage(text: str, vendor: str) -> Optional[float]:
     """从命令输出中解析 CPU 使用率。"""
     if not text:
         return None
+
+    # 飞塔 / Linux top 风格：CPU states: 5% user 2% system 0% nice 93% idle ...
+    # 使用率 = 100 - idle。注意必须放在通用 pattern 之前，
+    # 否则会被 "CPU[^\n:]*:\s*(\d+)%" 误匹配成 user 的 5%。
+    m = re.search(r"(\d+(?:\.\d+)?)\s*%\s*idle", text, re.IGNORECASE)
+    if m:
+        try:
+            return round(100 - float(m.group(1)), 2)
+        except ValueError:
+            pass
+
     patterns = [
         r"CPU utilization for five seconds:\s*(\d+)%",
         r"CPU utilization:\s*(\d+)%",
@@ -319,14 +330,29 @@ def parse_memory_usage(text: str, vendor: str) -> Tuple[Optional[float], Optiona
     pct: Optional[float] = None
     total_mb: Optional[float] = None
 
-    # 百分比：Used(%): 42  /  Memory Usage : 42%
-    m = re.search(r"(?:used|usage)\s*\(%\)\s*[:=]?\s*(\d+)", text, re.IGNORECASE)
-    if not m:
-        m = re.search(r"memory[^\n:]*[:=]\s*(\d+)\s*%", text, re.IGNORECASE)
-    if not m:
-        m = re.search(r"(\d+)\s*%\s*(?:of\s*)?memory", text, re.IGNORECASE)
-    if m:
-        pct = float(m.group(1))
+    # ---- 内存使用率 ----
+    # 依次尝试几种常见写法，命中即止
+    pct_patterns = [
+        # Used(%): 42  /  Memory Usage : 42%
+        r"(?:used|usage)\s*\(%\)\s*[:=]?\s*(\d+(?:\.\d+)?)",
+        r"memory[^\n:]*[:=]\s*(\d+(?:\.\d+)?)\s*%",
+        r"(\d+(?:\.\d+)?)\s*%\s*(?:of\s*)?memory",
+        # 飞塔等：Memory: 8171404k total, 2913948k used (35.7%), ...
+        # 百分比带小数且包在括号里，上面几条都匹配不到
+        r"([\d.]+)\s*[KMGT]B?\s*used\s*\(\s*(\d+(?:\.\d+)?)\s*%\)",
+        # 兜底：只带百分号的 used (50.0%)
+        r"\bused\s*\(\s*(\d+(?:\.\d+)?)\s*%\)",
+    ]
+    for pat in pct_patterns:
+        m = re.search(pat, text, re.IGNORECASE)
+        if not m:
+            continue
+        try:
+            # 带两个捕获组的模式取最后一个（百分比），其余取第一个
+            pct = float(m.group(len(m.groups())))
+        except (ValueError, IndexError):
+            continue
+        break
 
     # 总内存
     m = re.search(r"total\s*memory\s*[:=]\s*(\d+)\s*(K|KB|M|MB|G|GB)?", text, re.IGNORECASE)

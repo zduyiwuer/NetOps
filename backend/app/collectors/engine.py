@@ -170,6 +170,10 @@ class Collector:
             sample.system.response_ms = result.elapsed_ms
             values = result.values
             sample.system.uptime_sec = _as_int(values.get(OID_SYS_UPTIME))
+            # SNMP 的 sysUpTime 是 Timeticks（单位 1/100 秒），
+            # 直接当秒用会让运行时长偏大 100 倍
+            if sample.system.uptime_sec:
+                sample.system.uptime_sec //= 100
             sample.system.cpu_usage = _pick(values, self.vendor.cpu_oids)
             sample.system.temperature = _pick(values, self.vendor.temperature_oids)
             mem_total = _pick(values, self.vendor.mem_total_oids)
@@ -330,13 +334,19 @@ class Collector:
             sample.system.cpu_usage = await ssh.fetch_cpu()
             if sample.system.cpu_usage is not None:
                 sample.system.source = "ssh"
-        if sample.system.mem_usage is None:
+        if sample.system.mem_usage is None or sample.system.mem_total_mb is None:
             pct, total = await ssh.fetch_memory()
+            # 百分比与总内存任一可用都要写入——
+            # 只拿到总内存时也要记下来，否则「总内存」这一栏永远是空的
             if pct is not None:
                 sample.system.mem_usage = pct
+                sample.system.source = "ssh"
+            if total is not None:
                 sample.system.mem_total_mb = total
-                if total:
+                if pct is not None:
                     sample.system.mem_used_mb = round(total * pct / 100, 2)
+                else:
+                    sample.system.mem_used_mb = None
                 sample.system.source = "ssh"
 
     def _ssh_client(self) -> SshClient:
