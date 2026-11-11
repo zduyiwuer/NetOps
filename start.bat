@@ -98,9 +98,17 @@ REM ---------------------------------------------------- 端口占用检测
 echo ==^> 检查端口 %PORT%
 python -m scripts.service_helper port-busy %PORT% >nul 2>nul
 if not errorlevel 1 (
-  echo 端口 %PORT% 已被占用，请先释放该端口
+  REM 端口被占用：先判断占用者是不是本平台的 NetOps
+  set "RUNNING_PID="
+  for /f "usebackq delims=" %%P in (`python -m scripts.service_helper find-pid %PORT% 2^>nul`) do set "RUNNING_PID=%%P"
+  if defined RUNNING_PID (
+    echo NetOps 已在运行（PID !RUNNING_PID!），如需重启请执行 restart.bat
+  ) else (
+    echo 端口 %PORT% 已被其他程序占用，请先释放该端口
+    echo 或用其他端口启动：set NETOPS_PORT=9000 && start.bat
+  )
   popd
-goto :finish
+  goto :finish
 )
 
 REM ------------------------------------------------------------ 前台模式

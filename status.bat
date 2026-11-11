@@ -16,11 +16,21 @@ echo === NetOps 服务状态 ===
 pushd "%BACKEND%"
 
 if not exist "%PIDFILE%" (
-  echo 状态    : 未运行（无 PID 文件）
-  python -m scripts.service_helper reachable %PORT% >nul 2>nul
-  if not errorlevel 1 echo 提示    : 端口 %PORT% 有服务在监听，但缺少 PID 文件，请执行 stop.bat 清理
+  REM 无 PID 文件：按端口反查是否为 NetOps 进程
+  set "RUNNING_PID="
+  for /f "usebackq delims=" %%P in (`python -m scripts.service_helper find-pid %PORT% 2^>nul`) do set "RUNNING_PID=%%P"
+  if defined RUNNING_PID (
+    echo 状态    : 运行中
+    echo PID     : !RUNNING_PID!
+    echo 健康    : 正常（进程存活，端口 %PORT% 可连接）
+    echo 提示    : 缺少 PID 文件（可能由 uvicorn 直接启动），stop.bat 将按端口清理
+  ) else (
+    echo 状态    : 未运行（无 PID 文件）
+    python -m scripts.service_helper reachable %PORT% >nul 2>nul
+    if not errorlevel 1 echo 提示    : 端口 %PORT% 被其他程序占用
+  )
   popd
-goto :finish
+  goto :finish
 )
 
 set "PID="
