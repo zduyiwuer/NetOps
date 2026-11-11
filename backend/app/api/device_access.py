@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.crypto import MASK
-from app.core.security import client_ip, get_current_user, require_admin, require_operator
+from app.core.security import client_ip, get_current_user, require_admin, require_approver, require_operator
 from app.db.session import get_db
 from app.models.models import AaaSession, ConfigChangeRequest, Device, User
 from app.services import aaa_service, device_access_service
@@ -180,9 +180,9 @@ def review_change(
     payload: ReviewIn,
     request: Request,
     db: Session = Depends(get_db),
-    user: User = Depends(require_admin),
+    user: User = Depends(require_approver),
 ) -> Dict[str, Any]:
-    """审批配置变更（仅管理员）。"""
+    """审批配置变更（需审批员或管理员权限）。"""
     try:
         req = device_access_service.review_change_request(
             db,

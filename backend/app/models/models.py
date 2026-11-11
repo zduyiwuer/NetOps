@@ -302,7 +302,10 @@ class User(Base):
     email: Mapped[str] = mapped_column(String(128), default="")
     phone: Mapped[str] = mapped_column(String(32), default="")
     password_hash: Mapped[str] = mapped_column(String(255), default="")
-    role: Mapped[str] = mapped_column(String(16), default="viewer", index=True)  # admin/operator/viewer
+    # 主角色（向后兼容字段，等于 roles 中权限最高者）
+    role: Mapped[str] = mapped_column(String(16), default="viewer", index=True)  # admin/operator/approver/viewer
+    # 全部角色（JSON 数组）：支持一个用户同时具备多个角色，如 operator + approver
+    roles: Mapped[str] = mapped_column(Text, default="[]")  # JSON 数组
     source: Mapped[str] = mapped_column(String(16), default="local", index=True)  # local/ldap
     dn: Mapped[str] = mapped_column(String(512), default="")
     department: Mapped[str] = mapped_column(String(128), default="")

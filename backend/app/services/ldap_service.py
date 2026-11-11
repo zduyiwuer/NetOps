@@ -78,20 +78,47 @@ def _user_dn(username: str, conn=None) -> Optional[str]:
     return None
 
 
-def _map_role_from_groups(groups: List[str]) -> str:
-    """按 AD 组映射平台角色，取权限最高的。"""
+def _map_roles_from_groups(groups: List[str]) -> List[str]:
+    """按 AD 组映射平台角色，返回角色列表。
+
+    ``ldap.group_role_map`` 的值支持两种写法：
+    - 字符串：``{"网络运维组": "operator"}``
+    - 数组：``{"网络运维组": ["operator", "approver"]}``
+
+    命中多个组时**累加**所有角色（去重），因此一个域账号可同时
+    具备操作员与审批员等多个角色。
+    """
+    from app.core.roles import normalize_roles
+
     cfg = _runtime()
     try:
         mapping = json.loads(cfg.get("ldap.group_role_map") or "{}")
     except Exception:
         mapping = {}
-    rank = {"viewer": 1, "operator": 2, "admin": 3}
-    best = cfg.get("ldap.default_role") or "viewer"
-    for group in groups:
-        for key, role in mapping.items():
-            if key.lower() in group.lower() and rank.get(role, 0) > rank.get(best, 0):
-                best = role
-    return best
+
+    matched: List[str] = []
+    for group in groups or []:
+        lowered = group.lower()
+        for key, value in mapping.items():
+            if key.lower() not in lowered:
+                continue
+            if isinstance(value, (list, tuple)):
+                matched.extend(str(v) for v in value)
+            else:
+                matched.append(str(value))
+
+    roles = normalize_roles(matched)
+    if roles:
+        return roles
+    default_role = cfg.get("ldap.default_role") or "viewer"
+    return normalize_roles([default_role])
+
+
+def _map_role_from_groups(groups: List[str]) -> str:
+    """按 AD 组映射平台主角色（取权限最高者）。"""
+    from app.core.roles import primary_role
+
+    return primary_role(_map_roles_from_groups(groups))
 
 
 def _extract_groups(entry) -> List[str]:
@@ -189,6 +216,7 @@ def authenticate(username: str, password: str) -> Dict[str, Any]:
             "department": _attr(entry, "department"),
             "groups": groups,
             "role": _map_role_from_groups(groups),
+            "roles": _map_roles_from_groups(groups),
         }
     except Exception as exc:
         return {"ok": False, "message": f"域认证失败：{exc}"}
@@ -206,7 +234,16 @@ def sync_user(db: Session, profile: Dict[str, Any]) -> User:
     user.phone = profile.get("phone") or ""
     user.department = profile.get("department") or ""
     user.dn = profile.get("dn") or ""
-    user.role = profile.get("role") or _runtime().get("ldap.default_role") or "viewer"
+    # 域用户角色：优先用多角色映射，历史 profile 无 roles 时按单角色回退
+    from app.core.roles import dump_roles, effective_roles, normalize_roles, primary_role
+
+    mapped = profile.get("roles")
+    if mapped:
+        roles = normalize_roles(mapped)
+    else:
+        roles = normalize_roles([profile.get("role") or _runtime().get("ldap.default_role") or "viewer"])
+    user.role = primary_role(roles)
+    user.roles = dump_roles(roles)
     user.source = "ldap"
     user.is_active = True
     user.last_sync_at = datetime.now()
@@ -251,6 +288,7 @@ def list_domain_users(limit: int = 100) -> Dict[str, Any]:
                 "department": _attr(entry, "department"),
                 "groups": groups,
                 "role": _map_role_from_groups(groups),
+                "roles": _map_roles_from_groups(groups),
             })
         conn.unbind()
         return {"ok": True, "message": f"获取到 {len(users)} 个域用户", "users": users}

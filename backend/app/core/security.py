@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
@@ -10,6 +10,12 @@ from jose import JWTError, jwt
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.roles import (
+    ROLE_LEVEL,
+    can_approve,
+    effective_roles,
+    normalize_roles,
+)
 from app.db.session import get_db
 from app.models.models import User
 
@@ -36,16 +42,25 @@ def verify_password(plain: str, hashed: str) -> bool:
     except Exception:
         return False
 
-ROLE_LEVEL = {"viewer": 1, "operator": 2, "admin": 3}
-
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login", auto_error=False)
 
 
-def create_access_token(username: str, role: str, expires_minutes: Optional[int] = None) -> str:
+def create_access_token(
+    username: str,
+    role: str,
+    roles: Optional[List[str]] = None,
+    expires_minutes: Optional[int] = None,
+) -> str:
     expire = datetime.now(timezone.utc) + timedelta(
         minutes=expires_minutes or settings.access_token_expire_minutes
     )
-    payload = {"sub": username, "role": role, "exp": expire, "iat": datetime.now(timezone.utc)}
+    payload = {
+        "sub": username,
+        "role": role,
+        "roles": normalize_roles(roles) or normalize_roles([role]),
+        "exp": expire,
+        "iat": datetime.now(timezone.utc),
+    }
     return jwt.encode(payload, settings.secret_key, algorithm=settings.jwt_algorithm)
 
 
@@ -81,10 +96,16 @@ def get_current_user(
 
 
 def require_role(min_role: str):
-    """角色门槛依赖：admin > operator > viewer。"""
+    """角色门槛依赖：admin > operator > viewer。
+
+    多角色用户取所有角色中的**最高层级**判定——
+    同时具备 operator 与 approver 的用户，操作门槛按 operator 通过。
+    """
 
     def _dep(user: User = Depends(get_current_user)) -> User:
-        if ROLE_LEVEL.get(user.role, 0) < ROLE_LEVEL.get(min_role, 99):
+        levels = [ROLE_LEVEL.get(r, 0) for r in effective_roles(user)]
+        current = max(levels, default=0)
+        if current < ROLE_LEVEL.get(min_role, 99):
             raise HTTPException(status_code=403, detail=f"需要 {min_role} 及以上权限")
         return user
 
@@ -93,6 +114,18 @@ def require_role(min_role: str):
 
 require_admin = require_role("admin")
 require_operator = require_role("operator")
+
+
+def require_approver(user: User = Depends(get_current_user)) -> User:
+    """审批权依赖：拥有 approver 或 admin 角色即可审批。
+
+    这是与操作权**相互独立**的一条能力线：
+    - 纯审批员可以审批，但不因此获得设备增删改权限；
+    - 管理员天然含审批权（admin 角色隐含 approver）。
+    """
+    if not can_approve(user):
+        raise HTTPException(status_code=403, detail="需要审批员权限才能审批配置变更")
+    return user
 
 
 def client_ip(request: Request) -> str:

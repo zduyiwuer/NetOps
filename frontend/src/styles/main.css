@@ -156,6 +156,27 @@ body {
   color: var(--netops-text-muted);
 }
 
+/* 角色多选下拉：选项内展示角色说明 */
+.role-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.role-option-desc {
+  color: var(--netops-text-muted);
+  font-size: 12px;
+}
+
+/* 表单底部提示文字 */
+.form-tip {
+  color: var(--netops-text-muted);
+  font-size: 12px;
+  line-height: 1.6;
+  margin-top: 4px;
+}
+
 .text-ok {
   color: var(--netops-ok);
 }

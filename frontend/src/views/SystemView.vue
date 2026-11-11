@@ -157,9 +157,17 @@
                 </el-tag>
               </template>
             </el-table-column>
-            <el-table-column label="角色" width="90" align="center">
+            <el-table-column label="角色" min-width="150" align="center">
               <template #default="{ row }">
-                <el-tag size="small" :type="roleType(row.role)">{{ roleText(row.role) }}</el-tag>
+                <el-tag
+                  v-for="r in rowRoles(row)"
+                  :key="r"
+                  size="small"
+                  :type="roleType(r)"
+                  style="margin: 1px"
+                >
+                  {{ roleText(r) }}
+                </el-tag>
               </template>
             </el-table-column>
             <el-table-column label="状态" width="80" align="center">
@@ -475,12 +483,21 @@
         <el-form-item label="部门">
           <el-input v-model="userForm.department" />
         </el-form-item>
-        <el-form-item label="角色" prop="role">
-          <el-select v-model="userForm.role" style="width: 100%">
-            <el-option label="管理员（全部权限）" value="admin" />
-            <el-option label="操作员（可增删改设备、执行巡检）" value="operator" />
-            <el-option label="只读（仅查看）" value="viewer" />
+        <el-form-item label="角色" prop="roles">
+          <el-select v-model="userForm.roles" multiple style="width: 100%" placeholder="可多选，如同时具备操作员与审批员">
+            <el-option
+              v-for="opt in roleOptions"
+              :key="opt.key"
+              :label="opt.label"
+              :value="opt.key"
+            >
+              <div class="role-option">
+                <span>{{ opt.label }}</span>
+                <span class="role-option-desc">{{ opt.desc }}</span>
+              </div>
+            </el-option>
           </el-select>
+          <div class="form-tip">管理员已含全部权限；审批员可审批配置变更，不含设备操作权</div>
         </el-form-item>
         <el-form-item v-if="userForm.id" label="状态">
           <el-switch v-model="userForm.is_active" active-text="启用" inactive-text="停用" />
@@ -498,9 +515,17 @@
         <el-table-column prop="display_name" label="姓名" width="140" show-overflow-tooltip />
         <el-table-column prop="email" label="邮箱" min-width="180" show-overflow-tooltip />
         <el-table-column prop="department" label="部门" width="130" show-overflow-tooltip />
-        <el-table-column label="映射角色" width="100" align="center">
+        <el-table-column label="映射角色" min-width="140" align="center">
           <template #default="{ row }">
-            <el-tag size="small" :type="roleType(row.role)">{{ roleText(row.role) }}</el-tag>
+            <el-tag
+              v-for="r in rowRoles(row)"
+              :key="r"
+              size="small"
+              :type="roleType(r)"
+              style="margin: 1px"
+            >
+              {{ roleText(r) }}
+            </el-tag>
           </template>
         </el-table-column>
         <el-table-column label="AD 组" min-width="220">
@@ -547,6 +572,13 @@ const userDialog = ref(false)
 const userFormRef = ref()
 const userForm = reactive({})
 const domainDialog = ref(false)
+// 角色选项（从后端拉取，含说明文案）
+const roleOptions = ref([
+  { key: 'admin', label: '管理员', desc: '全部权限，含审批权' },
+  { key: 'operator', label: '操作员', desc: '设备增删改、执行采集、备份、巡检、提交变更申请' },
+  { key: 'approver', label: '审批员', desc: '审批配置变更申请，不含设备操作权' },
+  { key: 'viewer', label: '只读', desc: '仅查看，不可修改任何配置' },
+])
 
 const themeOptions = THEME_OPTIONS
 
@@ -566,7 +598,15 @@ const userRules = {
       trigger: 'blur',
     },
   ],
-  role: [{ required: true, message: '请选择角色', trigger: 'change' }],
+  roles: [
+    {
+      validator: (rule, value, cb) => {
+        if (!value || !value.length) cb(new Error('请至少选择一个角色'))
+        else cb()
+      },
+      trigger: 'change',
+    },
+  ],
 }
 
 const jobDesc = {
@@ -663,10 +703,15 @@ function fmtTime(t) {
   return t ? t.replace('T', ' ').slice(0, 19) : '-'
 }
 function roleText(r) {
-  return { admin: '管理员', operator: '操作员', viewer: '只读' }[r] || r
+  return { admin: '管理员', operator: '操作员', approver: '审批员', viewer: '只读' }[r] || r
 }
 function roleType(r) {
-  return { admin: 'danger', operator: 'warning', viewer: 'info' }[r] || 'info'
+  return { admin: 'danger', operator: 'warning', approver: 'success', viewer: 'info' }[r] || 'info'
+}
+// 取行的角色集合（历史数据只有单角色时回退）
+function rowRoles(row) {
+  if (Array.isArray(row?.roles) && row.roles.length) return row.roles
+  return row?.role ? [row.role] : ['viewer']
 }
 
 async function loadHealth() {
@@ -689,6 +734,18 @@ async function loadUsers() {
   }
 }
 
+// 拉取后端角色清单（含说明文案），失败时保留内置兜底
+async function loadRoles() {
+  try {
+    const res = await authApi.listRoles()
+    if (Array.isArray(res.items) && res.items.length) {
+      roleOptions.value = res.items
+    }
+  } catch (e) {
+    /* 忽略，使用内置默认值 */
+  }
+}
+
 async function loadLoginLogs() {
   try {
     const res = await authApi.loginLogs(100)
@@ -699,7 +756,7 @@ async function loadLoginLogs() {
 }
 
 async function reload() {
-  await Promise.all([loadHealth(), loadUsers(), loadLoginLogs(), loadSettings(), loadJobs()])
+  await Promise.all([loadHealth(), loadUsers(), loadLoginLogs(), loadSettings(), loadJobs(), loadRoles()])
 }
 
 async function loadSettings() {
@@ -845,9 +902,9 @@ function openUser(row) {
     userForm,
     {
       id: null, username: '', password: '', display_name: '', email: '', phone: '',
-      role: 'viewer', department: '', is_active: true,
+      roles: ['viewer'], department: '', is_active: true,
     },
-    row ? { ...row, password: '' } : {},
+    row ? { ...row, password: '', roles: rowRoles(row) } : {},
   )
   userDialog.value = true
 }
@@ -862,7 +919,7 @@ async function saveUser() {
         display_name: userForm.display_name,
         email: userForm.email,
         phone: userForm.phone,
-        role: userForm.role,
+        roles: userForm.roles,
         department: userForm.department,
         is_active: userForm.is_active,
       }
@@ -875,7 +932,7 @@ async function saveUser() {
         display_name: userForm.display_name,
         email: userForm.email,
         phone: userForm.phone,
-        role: userForm.role,
+        roles: userForm.roles,
         department: userForm.department,
       })
     }

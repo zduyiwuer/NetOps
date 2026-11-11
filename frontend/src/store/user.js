@@ -1,6 +1,14 @@
 import { defineStore } from 'pinia'
 import { authApi } from '../api'
 
+// 角色中文名与配色（与后端 app/core/roles.py 的 ROLE_META 对应）
+export const ROLE_META = {
+  admin: { label: '管理员', type: 'danger' },
+  operator: { label: '操作员', type: 'warning' },
+  approver: { label: '审批员', type: 'success' },
+  viewer: { label: '只读', type: 'info' },
+}
+
 export const useUserStore = defineStore('user', {
   state: () => ({
     token: localStorage.getItem('netops_token') || '',
@@ -10,9 +18,36 @@ export const useUserStore = defineStore('user', {
   }),
   getters: {
     isLoggedIn: (state) => !!state.token,
+    // 用户实际拥有的角色集合（历史数据只有单角色时回退到 role）
+    roles: (state) => {
+      const list = state.user?.roles
+      if (Array.isArray(list) && list.length) return list
+      return state.user?.role ? [state.user.role] : ['viewer']
+    },
+    // 主角色：权限最高者
     role: (state) => state.user?.role || 'viewer',
-    isAdmin: (state) => state.user?.role === 'admin',
-    canOperate: (state) => ['admin', 'operator'].includes(state.user?.role),
+    isAdmin: (state) => {
+      const list = state.user?.roles
+      if (Array.isArray(list) && list.length) return list.includes('admin')
+      return state.user?.role === 'admin'
+    },
+    canOperate: (state) => {
+      const list = state.user?.roles
+      const roles = Array.isArray(list) && list.length ? list : [state.user?.role]
+      return roles.includes('admin') || roles.includes('operator')
+    },
+    // 审批权：审批员或管理员
+    canApprove: (state) => {
+      const list = state.user?.roles
+      const roles = Array.isArray(list) && list.length ? list : [state.user?.role]
+      return roles.includes('admin') || roles.includes('approver')
+    },
+    // 角色中文标签列表
+    roleLabels: (state) => {
+      const list = state.user?.roles
+      const roles = Array.isArray(list) && list.length ? list : [state.user?.role || 'viewer']
+      return roles.map((r) => ROLE_META[r]?.label || r)
+    },
     displayName: (state) => state.user?.display_name || state.user?.username || '',
   },
   actions: {

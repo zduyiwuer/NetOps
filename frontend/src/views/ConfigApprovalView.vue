@@ -78,7 +78,7 @@
           <template #default="{ row }">
             <el-button link type="primary" size="small" @click="showDetail(row)">详情</el-button>
             <el-button
-              v-if="row.status === 'pending' && userStore.isAdmin"
+              v-if="row.status === 'pending' && userStore.canApprove && row.applicant !== userStore.user?.username"
               link
               type="success"
               size="small"
@@ -87,7 +87,7 @@
               批准
             </el-button>
             <el-button
-              v-if="row.status === 'pending' && userStore.isAdmin"
+              v-if="row.status === 'pending' && userStore.canApprove && row.applicant !== userStore.user?.username"
               link
               type="danger"
               size="small"

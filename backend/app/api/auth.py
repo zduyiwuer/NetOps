@@ -2,13 +2,22 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.roles import (
+    ALL_ROLES,
+    ROLE_META,
+    dump_roles,
+    effective_roles,
+    normalize_roles,
+    primary_role,
+    role_descriptions,
+)
 from app.core.security import (
     client_ip,
     create_access_token,
@@ -36,7 +45,9 @@ class UserCreate(BaseModel):
     display_name: str = ""
     email: str = ""
     phone: str = ""
-    role: str = "viewer"
+    # 主角色：仅当未指定 roles 时生效（兼容单角色调用方）
+    role: Optional[str] = None
+    roles: List[str] = Field(default_factory=list, description="角色列表，可多选")
     department: str = ""
 
 
@@ -45,9 +56,35 @@ class UserUpdate(BaseModel):
     email: Optional[str] = None
     phone: Optional[str] = None
     role: Optional[str] = None
+    roles: Optional[List[str]] = None
     department: Optional[str] = None
     is_active: Optional[bool] = None
     password: Optional[str] = None
+
+
+def _resolve_roles(
+    roles: Optional[List[str]],
+    primary: Optional[str],
+    fallback: Optional[List[str]] = None,
+) -> List[str]:
+    """解析角色输入。
+
+    - 传了 roles → 以 roles 为准（并保证主角色在集合内）
+    - 只传了 role → 单角色
+    - 都没传 → 用 fallback（更新场景为保持原状）
+    """
+    if roles:
+        normalized = normalize_roles(roles, primary)
+        if not normalized:
+            raise HTTPException(status_code=400, detail="角色非法")
+        return normalized
+    if primary:
+        if primary not in ALL_ROLES:
+            raise HTTPException(status_code=400, detail="角色非法")
+        return normalize_roles([primary])
+    if fallback is not None:
+        return normalize_roles(fallback)
+    return normalize_roles(["viewer"])
 
 
 def _log_login(db: Session, username: str, success: bool, source: str, ip: str, ua: str, message: str = "") -> None:
@@ -110,7 +147,7 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
                 _log_login(db, payload.username, False, "ldap", ip, ua, "密码错误")
                 raise HTTPException(status_code=401, detail="用户名或密码错误")
 
-    token = create_access_token(user.username, user.role)
+    token = create_access_token(user.username, user.role, effective_roles(user))
     user.last_login_at = datetime.now()
     db.commit()
     _log_login(db, user.username, True, user.source, ip, ua, "登录成功")
@@ -124,13 +161,15 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
 
 
 def _user_payload(user: User) -> Dict[str, Any]:
+    roles = effective_roles(user)
     return {
         "id": user.id,
         "username": user.username,
         "display_name": user.display_name or user.username,
         "email": user.email,
         "phone": user.phone,
-        "role": user.role,
+        "role": user.role or primary_role(roles),
+        "roles": roles,
         "source": user.source,
         "department": user.department,
         "last_login_at": user.last_login_at.isoformat() if user.last_login_at else None,
@@ -140,6 +179,12 @@ def _user_payload(user: User) -> Dict[str, Any]:
 @router.get("/me")
 def me(user: User = Depends(get_current_user)) -> Dict[str, Any]:
     return _user_payload(user)
+
+
+@router.get("/roles")
+def list_roles() -> Dict[str, Any]:
+    """角色清单：供用户管理界面渲染多选角色。"""
+    return {"items": role_descriptions()}
 
 
 @router.get("/users")
@@ -152,14 +197,14 @@ def list_users(db: Session = Depends(get_db), _: User = Depends(require_admin)) 
 def create_user(payload: UserCreate, db: Session = Depends(get_db), _: User = Depends(require_admin)) -> Dict[str, Any]:
     if db.query(User).filter(User.username == payload.username).first():
         raise HTTPException(status_code=400, detail="用户名已存在")
-    if payload.role not in ("admin", "operator", "viewer"):
-        raise HTTPException(status_code=400, detail="角色非法")
+    roles = _resolve_roles(payload.roles, payload.role)
     user = User(
         username=payload.username,
         display_name=payload.display_name or payload.username,
         email=payload.email,
         phone=payload.phone,
-        role=payload.role,
+        role=primary_role(roles),
+        roles=dump_roles(roles),
         department=payload.department,
         password_hash=hash_password(payload.password),
         source="local",
@@ -187,10 +232,12 @@ def update_user(
         user.phone = payload.phone
     if payload.department is not None:
         user.department = payload.department
-    if payload.role is not None:
-        if payload.role not in ("admin", "operator", "viewer"):
-            raise HTTPException(status_code=400, detail="角色非法")
-        user.role = payload.role
+    if payload.roles is not None or payload.role is not None:
+        # 未传 roles 时保持原有角色集合；传了则以新集合为准
+        fallback = effective_roles(user) if payload.roles is None else None
+        roles = _resolve_roles(payload.roles, payload.role, fallback)
+        user.roles = dump_roles(roles)
+        user.role = primary_role(roles)
     if payload.is_active is not None:
         user.is_active = payload.is_active
     if payload.password:

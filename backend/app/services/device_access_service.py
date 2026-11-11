@@ -217,7 +217,12 @@ def review_change_request(
     comment: str = "",
     ip: str = "",
 ) -> ConfigChangeRequest:
-    """审批配置变更申请。"""
+    """审批配置变更申请。
+
+    职责分离：**申请人不能审批自己的申请**。
+    当同一个人同时具备 operator 与 approver 角色时，这条规则尤其重要——
+    否则「自己提交、自己审批」会让审批形同虚设。
+    """
     req = db.get(ConfigChangeRequest, request_id)
     if req is None:
         raise ValueError("申请不存在")
@@ -225,6 +230,8 @@ def review_change_request(
         raise ValueError(f"当前状态为「{STATUS_TEXT.get(req.status, req.status)}」，不可审批")
     if not approve and not comment.strip():
         raise ValueError("驳回时必须填写意见")
+    if req.applicant and req.applicant == reviewer:
+        raise ValueError("申请人不能审批自己的变更申请，请转交其他审批人")
 
     req.status = STATUS_APPROVED if approve else STATUS_REJECTED
     req.reviewer = reviewer

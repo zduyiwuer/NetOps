@@ -112,7 +112,16 @@
             <span class="user-chip">
               <el-avatar :size="26" class="avatar">{{ avatarText }}</el-avatar>
               <span class="uname">{{ userStore.displayName }}</span>
-              <el-tag size="small" :type="roleTagType" effect="plain">{{ roleLabel }}</el-tag>
+              <el-tag
+                v-for="(tag, idx) in roleTags"
+                :key="tag.label"
+                size="small"
+                :type="tag.type"
+                effect="plain"
+                :style="{ marginRight: idx < roleTags.length - 1 ? '4px' : '0' }"
+              >
+                {{ tag.label }}
+              </el-tag>
               <el-icon><CaretBottom /></el-icon>
             </span>
             <template #dropdown>
@@ -257,12 +266,17 @@ function onTheme(mode) {
   themeStore.setMode(mode)
 }
 
-const roleLabel = computed(
-  () => ({ admin: '管理员', operator: '操作员', viewer: '只读' })[userStore.role] || userStore.role
-)
-const roleTagType = computed(
-  () => ({ admin: 'danger', operator: 'warning', viewer: 'info' })[userStore.role] || 'info'
-)
+// 顶栏角色标签：支持一个用户同时具备多个角色
+const roleTags = computed(() => {
+  const map = {
+    admin: { label: '管理员', type: 'danger' },
+    operator: { label: '操作员', type: 'warning' },
+    approver: { label: '审批员', type: 'success' },
+    viewer: { label: '只读', type: 'info' },
+  }
+  const roles = userStore.roles || []
+  return (roles.length ? roles : ['viewer']).map((r) => map[r] || { label: r, type: 'info' })
+})
 const avatarText = computed(() => (userStore.displayName || '?').charAt(0).toUpperCase())
 
 async function loadAlertCount() {

@@ -21,7 +21,7 @@ NetFlow 会话分析、gNMI 遥测、配置备份、基线巡检与自动报告�
 
 | 模块 | 能力说明 |
 | --- | --- |
-| 登录与权限 | JWT 登录页、三级角色（管理员 / 操作员 / 只读）、登录审计、操作审计 |
+| 登录与权限 | JWT 登录页、**四种角色（管理员 / 操作员 / 审批员 / 只读）**、**一个用户可分配多个角色**、登录审计、操作审计 |
 | 域控对接 | LDAP / Active Directory 认证、域用户同步、AD 组 → 平台角色映射（**系统管理页在线配置**） |
 | 设备管理 | 增删改查、Excel/CSV 批量导入导出、SNMP v1/v2c/v3 与 SSH 连通性测试；支持 8 类厂商 |
 | 实时接口速率 | IF-MIB 64 位计数器差分、协商速率自适应、利用率计算、Down/错包标识、**按门店筛选** |
@@ -106,9 +106,9 @@ netops/
 │   │   │   ├── report.py        HTML / Excel 报告生成
 │   │   │   ├── importer.py     Excel / CSV 导入导出
 │   │   │   └── ldap_service.py 域控对接
-│   │   ├── core/               配置、安全、凭据加密
+│   │   ├── core/               配置、安全、凭据加密、角色定义
 │   │   └── models/             SQLAlchemy 数据模型
-│   └── scripts/                验证脚本（SNMP / NetFlow / gNMI / 端到端 / UI）
+│   └── scripts/                验证脚本（SNMP / NetFlow / gNMI / 端到端 / UI / 角色）
 └── frontend/                   Vue 3 + Element Plus + ECharts
     └── src/views/              14 个功能页面
 ```
@@ -289,7 +289,8 @@ NETOPS_LDAP_GROUP_ROLE_MAP={"CN=NetOps-Admins,OU=Groups,DC=corp,DC=local":"admin
 
 - `NETOPS_LDAP_USER_DN_TEMPLATE` 可直接指定 DN 模板（如 `CN={username},OU=Users,DC=corp,DC=local`），
   留空则按 `NETOPS_LDAP_USER_FILTER` 搜索。
-- `NETOPS_LDAP_GROUP_ROLE_MAP` 为 JSON，键为 AD 组 DN，值为平台角色；取匹配到的最高权限。
+- `NETOPS_LDAP_GROUP_ROLE_MAP` 为 JSON，键为 AD 组 DN，值为平台角色；
+  值可以是字符串（单角色）或数组（多角色），命中多个组时**累加**所有角色。
 - 登录页在启用后自动出现「本地账号 / 域账号」切换；`auto` 模式下优先尝试域控。
 - 系统管理 → 域控对接：测试连接、同步域用户、查看域用户与映射角色。
 
@@ -491,7 +492,13 @@ python -m scripts.verify_alert_detail  # 36 项：接口级告警明细、指标
 python -m scripts.verify_alert_ui      # 12 项：门店筛选控件、联动、详情展开行、接口明细表
 
 # 12. 飞塔配置转换验证（.conf 输出）
-python -m scripts.verify_fortinet_config  # 43 项：噪声剥离、结构解析、元信息头、截断检出、扩展名区分
+python -m scripts.verify_fortinet_config  # 48 项：噪声剥离、结构解析、元信息头、截断检出、扩展名区分
+
+# 13. 多角色与审批员权限验证
+python -m scripts.verify_roles         # 80 项：角色定义、多角色存储、权限判定、API、审批流程
+
+# 14. 多角色前端 UI 验证（需先启动前后端服务）
+python -m scripts.verify_roles_ui      # 15 项：多选角色、多角色标签展示、审批入口、职责分离
 ```
 
 > 容器内运行验证脚本时，需先启动服务并把 `BASE` 指向容器地址。
@@ -509,7 +516,9 @@ python -m scripts.verify_fortinet_config  # 43 项：噪声剥离、结构解析
 2. 填写服务器地址、端口（SSL / StartTLS）、Base DN、绑定服务账号与密码
 3. 可选：填写用户过滤器或用户 DN 模板（两者二选一）
 4. 可选：配置 AD 组 → 平台角色映射（JSON），例如
-   `{"CN=NetOps-Admins,OU=Groups,DC=corp,DC=local":"admin"}`
+   `{"CN=NetOps-Admins,OU=Groups,DC=corp,DC=local":"admin"}`；
+   值也可写成数组以授予多个角色：
+   `{"CN=NetOps-Approvers,OU=Groups,DC=corp,DC=local":["operator","approver"]}`
 5. 点「保存配置」→「测试连接」→「同步域用户」
 
 配置保存在数据库 `settings` 表中，优先级高于环境变量。
@@ -630,16 +639,19 @@ aaa authorization exec default group tacacs+ local
 设备配置不能直接下发，需经审批流程：
 
 ```
-提交申请(pending) → 管理员审批(approved / rejected) → 下发到设备(applied / failed)
+提交申请(pending) → 审批员/管理员审批(approved / rejected) → 下发到设备(applied / failed)
 ```
 
 - **提交**：操作员选择设备、填写变更标题/说明与待下发的配置命令（或指定要回滚到的备份版本），
   自动生成工单号（`CFG + 日期 + 序号`）
-- **审批**：仅管理员可批准或驳回；驳回必须填写意见；已审批的申请不可重复审批
+- **审批**：**审批员或管理员**可批准或驳回；驳回必须填写意见；已审批的申请不可重复审批；
+  **申请人不能审批自己提交的申请**（职责分离，服务端强制校验）
 - **下发**：按厂商自动进入对应配置模式（Cisco `configure terminal`、华为/H3C `system-view`、
   飞塔 `config`、MikroTik 脚本模式），下发前**自动备份当前配置**以便回滚，
   并解析设备回显判断是否出错
 - **审计**：提交、审批、下发三个环节全部写入操作日志
+
+> 角色的完整说明与多角色分配方式见「[九之十、角色体系与多角色分配](#九之十角色体系与多角色分配)」。
 
 ---
 
@@ -681,7 +693,90 @@ aaa authorization exec default group tacacs+ local
 
 ---
 
-## 九之十、配置备份输出格式（飞塔 .conf）
+## 九之十、角色体系与多角色分配
+
+### 四种角色
+
+| 角色 | 键名 | 层级 | 能力 |
+| --- | --- | --- | --- |
+| 管理员 | `admin` | 3 | 全部权限，**含审批权** |
+| 操作员 | `operator` | 2 | 查看 + 设备增删改、执行采集、备份、巡检、**提交**变更申请 |
+| **审批员** | `approver` | 2 | 查看 + **审批**配置变更申请（**不含**设备操作权） |
+| 只读 | `viewer` | 1 | 仅查看，不可修改任何配置 |
+
+**关键设计：审批权是独立的能力维度，不是层级链上的一环。**
+
+- 纯 `approver` 不会因为层级是 2 而获得设备增删改权限（那属于 `operator`），
+  两者能力互不覆盖；
+- `admin` 天然包含审批权，因此管理员依旧可以审批；
+- 审批员只能**审批**，不能**提交**变更申请——提交仍需操作员权限。
+
+### 一个用户可以有多个角色
+
+系统管理 → 用户管理 → 角色字段为**多选**，可同时勾选多个角色。
+
+| 场景 | 分配角色 | 效果 |
+| --- | --- | --- |
+| 运维工程师 | 操作员 | 能提交变更申请，能操作设备 |
+| 网络主管 | 操作员 + 审批员 | 既能提交变更申请，也能审批他人申请 |
+| 专职审批 | 审批员 | 只审批，不碰设备 |
+| 安全审计 | 只读 | 只看，不改 |
+
+多角色用户的权限是**各角色能力的并集**，层级判定取最高者。
+例如「操作员 + 审批员」的层级为 2（操作员），同时具备审批权。
+
+### 职责分离：申请人不能审批自己的申请
+
+无论一个人拥有多少角色，**他都不能审批自己提交的变更申请**。
+这条规则在服务端强制执行：
+
+- 提交人为 `alice`、审批人也为 `alice` → 拒绝，提示
+  「申请人不能审批自己的变更申请，请转交其他审批人」；
+- 前端「配置审批」页会**隐藏**自己提交的待审批单据的批准/驳回按钮；
+- 这让「操作员 + 审批员」的双角色分配真正有意义——
+  否则同一个人提交又审批，审批环节形同虚设。
+
+### 域账号的多角色映射
+
+`NETOPS_LDAP_GROUP_ROLE_MAP`（或系统管理 → 域控对接页）支持两种写法：
+
+```json
+{
+  "CN=NetOps-Admins,OU=Groups,DC=corp,DC=local": "admin",
+  "CN=NetOps-Operators,OU=Groups,DC=corp,DC=local": "operator",
+  "CN=NetOps-Approvers,OU=Groups,DC=corp,DC=local": ["operator", "approver"]
+}
+```
+
+- 值为**字符串**：单角色；
+- 值为**数组**：该 AD 组的成员同时拥有多个角色；
+- 命中**多个组**时**累加**所有角色（去重），而非只取最高权限。
+
+域用户每次登录/同步都会按当前 AD 组重新计算角色集合。
+
+### 数据兼容
+
+| 字段 | 说明 |
+| --- | --- |
+| `users.role` | 主角色，等于角色集合中权限最高者（保留此字段以兼容既有代码与外部集成） |
+| `users.roles` | 角色集合，JSON 数组，如 `["operator","approver"]` |
+
+历史数据的 `roles` 为空时自动按 `role` 单值回退，**升级无需任何数据处理**。
+新增的 `roles` 列由平台启动时的轻量迁移自动补齐。
+
+### 自行验证
+
+```bash
+# 后端目录下执行：80 项断言，覆盖角色定义、多角色存储、权限判定、API 与审批流程
+python -u -m scripts.verify_roles
+
+# 前端 UI 验证（需先启动前后端服务）：15 项，覆盖多角色展示与审批入口
+python -u -m scripts.verify_roles_ui
+```
+
+---
+
+## 九之十一、配置备份输出格式（飞塔 .conf）
 
 备份时不再把 SSH 原始回显直接存盘，而是先经**按厂商的格式化器**整理，
 再写入备份目录。文件扩展名也按厂商区分：

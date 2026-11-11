@@ -44,6 +44,7 @@ export const authApi = {
   login: (data) => http.post('/auth/login', data),
   me: () => http.get('/auth/me'),
   listUsers: () => http.get('/auth/users'),
+  listRoles: () => http.get('/auth/roles'),
   createUser: (data) => http.post('/auth/users', data),
   updateUser: (id, data) => http.put(`/auth/users/${id}`, data),
   deleteUser: (id) => http.delete(`/auth/users/${id}`),

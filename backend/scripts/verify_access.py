@@ -229,12 +229,19 @@ async def main() -> int:
         )
         check("提交申请", req.status == "pending" and bool(req.ticket_no), f"{req.ticket_no} {req.status}")
 
-        das.review_change_request(db, req.id, approve=True, reviewer="admin", comment="同意")
+        # 职责分离：申请人不能审批自己的申请
+        try:
+            das.review_change_request(db, req.id, approve=True, reviewer="admin", comment="同意")
+            check("申请人不能审批自己的申请", False, "未抛出异常")
+        except ValueError as exc:
+            check("申请人不能审批自己的申请", "自己" in str(exc), str(exc))
+
+        das.review_change_request(db, req.id, approve=True, reviewer="approver_zhang", comment="同意")
         check("审批通过", req.status == "approved", req.status)
 
         # 重复审批应失败
         try:
-            das.review_change_request(db, req.id, approve=True, reviewer="admin")
+            das.review_change_request(db, req.id, approve=True, reviewer="approver_li")
             check("重复审批被拒绝", False, "未抛出异常")
         except ValueError as exc:
             check("重复审批被拒绝", True, str(exc))
@@ -245,7 +252,7 @@ async def main() -> int:
             config_content="test", applicant="admin",
         )
         try:
-            das.review_change_request(db, req2.id, approve=False, reviewer="admin")
+            das.review_change_request(db, req2.id, approve=False, reviewer="approver_li")
             check("驳回未填意见被拒绝", False, "未抛出异常")
         except ValueError as exc:
             check("驳回未填意见被拒绝", True, str(exc))
