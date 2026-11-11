@@ -160,7 +160,63 @@ cd ../backend && python -m uvicorn app.main:app --host 0.0.0.0 --port 8900
 
 后端会自动托管 `frontend/dist`，单端口访问 <http://localhost:8900> 即可。
 
-### 5. 默认账号
+### 5. 后台运行与启停脚本
+
+不想一直开着终端？用随项目提供的启停脚本，服务会在后台常驻，
+**关闭终端 / 退出 SSH 后依然继续运行**。
+
+| 操作 | Linux / macOS | Windows |
+| --- | --- | --- |
+| 后台启动 | `./start.sh` | `start.bat` |
+| 前台启动（调试用） | `./start.sh --foreground` | `start.bat --foreground` |
+| 停止 | `./stop.sh` | `stop.bat` |
+| 重启 | `./restart.sh` | `restart.bat` |
+| 查看状态 | `./status.sh` | `status.bat` |
+
+```bash
+cd netops
+./start.sh                 # 后台启动
+./status.sh                # 查看状态
+./stop.sh                  # 停止服务
+```
+
+**脚本行为**
+
+- **自动准备环境**：缺后端依赖自动装、缺前端依赖自动装、`frontend/dist` 不存在时自动构建
+- **PID 跟踪**：进程 PID 写入 `backend/data/run/netops.pid`，停止时按 PID 精确终止
+- **日志落盘**：运行日志写入 `backend/data/logs/netops.log`；超过 5 MB 自动切分为历史文件
+- **健康检查**：启动后轮询端口，最多等 60 秒；就绪后打印访问地址与 PID
+- **重复启动保护**：已在运行时再次执行会提示「已在运行」，不会起第二个实例
+- **端口冲突检测**：端口被其他程序占用时明确报错，而不是静默失败
+- **优雅停止**：先发终止信号，最多等 10 秒；未退出则强制结束，并清理端口上的残留进程
+- **PID 文件失效**：进程已不存在时会自动清理 PID 文件，不留脏状态
+
+**产物位置**
+
+| 路径 | 说明 |
+| --- | --- |
+| `backend/data/run/netops.pid` | 当前进程 PID |
+| `backend/data/logs/netops.log` | 运行日志 |
+| `backend/data/logs/netops_*.log` | 切分出的历史日志 |
+
+**自定义端口**
+
+```bash
+PORT=9000 ./start.sh                     # Linux
+set NETOPS_PORT=9000 && start.bat        # Windows
+```
+
+> **提示**：Windows 批处理为 **GBK 编码 + CRLF 换行**，这是 cmd.exe 正确解析中文的必需组合。
+> 若用编辑器修改请保持该编码，否则会出现命令解析异常。
+
+**自行验证**
+
+```bash
+cd netops/backend
+python -u -m scripts.verify_service    # 54 项：脚本齐全性、编码、helper 子命令、启停全生命周期
+```
+
+### 6. 默认账号
 
 | 用户名 | 密码 | 角色 |
 | --- | --- | --- |
@@ -499,6 +555,9 @@ python -m scripts.verify_roles         # 80 项：角色定义、多角色存储
 
 # 14. 多角色前端 UI 验证（需先启动前后端服务）
 python -m scripts.verify_roles_ui      # 15 项：多选角色、多角色标签展示、审批入口、职责分离
+
+# 15. 后台启停脚本验证（脚本会自行启停服务）
+python -m scripts.verify_service       # 54 项：脚本齐全性、编码、helper 子命令、启停全生命周期
 ```
 
 > 容器内运行验证脚本时，需先启动服务并把 `BASE` 指向容器地址。
@@ -1024,14 +1083,17 @@ netops/
 │   │   ├── models/       数据模型
 │   │   ├── proto/        gNMI protobuf 定义
 │   │   └── services/     业务服务层
-│   ├── scripts/          12 套自动化验证脚本
+│   ├── scripts/          14 套自动化验证脚本 + 服务管理辅助
 │   └── requirements.txt
 ├── frontend/             Vue 3 + Element Plus + ECharts
 │   └── src/views/        18 个功能页面
 ├── docs/screenshots/     界面截图
 ├── Dockerfile            三阶段构建
 ├── docker-compose.yml    编排配置
-├── start.sh / start.bat  源码方式一键启动
+├── start.sh / stop.sh    后台启停脚本（Linux / macOS）
+├── start.bat / stop.bat  后台启停脚本（Windows）
+├── restart.sh / .bat     重启脚本
+└── status.sh / .bat      状态查看脚本
 └── push_github.sh        一键推送 GitHub
 ```
 

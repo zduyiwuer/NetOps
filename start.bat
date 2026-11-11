@@ -1,34 +1,166 @@
 @echo off
-REM NetOps ä¸€é”®å¯åŠ¨ï¼ˆWindowsï¼‰
-setlocal
-set ROOT=%~dp0
-set PORT=8900
+REM ============================================================
+REM  NetOps Æô¶¯½Å±¾£¨Windows£©
+REM
+REM  ÓÃ·¨£º
+REM    start.bat                ºóÌ¨Æô¶¯£¨Ä¬ÈÏ£©
+REM    start.bat --foreground   Ç°Ì¨ÔËĞĞ£¨Ctrl+C Í£Ö¹£©
+REM    start.bat --rebuild      Ç¿ÖÆÖØĞÂ¹¹½¨Ç°¶Ë
+REM
+REM  ºóÌ¨ÔËĞĞ²úÎï£º
+REM    backend\data\run\netops.pid   ½ø³Ì PID
+REM    backend\data\logs\netops.log   ÔËĞĞÈÕÖ¾
+REM ============================================================
+setlocal EnableDelayedExpansion
 
-echo ==^> æ£€æŸ¥ä¾èµ–
-where python >nul 2>nul || (echo æœªæ‰¾åˆ° python & exit /b 1)
-where node >nul 2>nul || (echo æœªæ‰¾åˆ° node & exit /b 1)
+set "ROOT=%~dp0"
+set "BACKEND=%ROOT%backend"
+set "FRONTEND=%ROOT%frontend"
+set "RUNDIR=%BACKEND%\data\run"
+set "LOGDIR=%BACKEND%\data\logs"
+set "PIDFILE=%RUNDIR%\netops.pid"
+set "LOGFILE=%LOGDIR%\netops.log"
 
-cd /d "%ROOT%backend"
+set "PORT=8900"
+if defined NETOPS_PORT set "PORT=%NETOPS_PORT%"
+set "HOST=0.0.0.0"
+set "FOREGROUND=0"
+set "FORCEBUILD=0"
+
+:parse_args
+if "%~1"=="" goto after_args
+if /i "%~1"=="--foreground" set "FOREGROUND=1" & shift & goto parse_args
+if /i "%~1"=="-f"          set "FOREGROUND=1" & shift & goto parse_args
+if /i "%~1"=="--rebuild"  set "FORCEBUILD=1" & shift & goto parse_args
+if /i "%~1"=="--help"     goto usage
+if /i "%~1"=="-h"         goto usage
+echo Î´Öª²ÎÊı£º%~1£¨ÓÃ --help ²é¿´ÓÃ·¨£©
+exit /b 1
+
+:usage
+echo NetOps Æô¶¯½Å±¾£¨Windows£©
+echo.
+echo   start.bat                ºóÌ¨Æô¶¯£¨Ä¬ÈÏ£©
+echo   start.bat --foreground   Ç°Ì¨ÔËĞĞ
+echo   start.bat --rebuild      Ç¿ÖÆÖØĞÂ¹¹½¨Ç°¶Ë
+exit /b 0
+
+:after_args
+
+REM ------------------------------------------------------------ ¼ì²éÒÀÀµ
+echo ==^> ¼ì²éÒÀÀµ
+where python >nul 2>nul || (echo Î´ÕÒµ½ python£¬ÇëÏÈ°²×° Python 3.10+ & exit /b 1)
+where node   >nul 2>nul || (echo Î´ÕÒµ½ node£¬ÇëÏÈ°²×° Node.js 18+ & exit /b 1)
+
+pushd "%BACKEND%"
 python -c "import fastapi" >nul 2>nul || (
-  echo ==^> å®‰è£…åç«¯ä¾èµ–
+  echo ==^> °²×°ºó¶ËÒÀÀµ
   python -m pip install -r requirements.txt
 )
 
-cd /d "%ROOT%frontend"
+pushd "%FRONTEND%"
 if not exist node_modules (
-  echo ==^> å®‰è£…å‰ç«¯ä¾èµ–
+  echo ==^> °²×°Ç°¶ËÒÀÀµ
   call npm install
 )
-if not exist dist (
-  echo ==^> æ„å»ºå‰ç«¯
-  call npm run build
+if "%FORCEBUILD%"=="1" goto do_build
+if not exist dist goto do_build
+goto build_done
+:do_build
+echo ==^> ¹¹½¨Ç°¶Ë
+call npm run build
+:build_done
+popd
+
+pushd "%BACKEND%"
+if not exist data\backups mkdir data\backups
+if not exist data\reports  mkdir data\reports
+if not exist data\imports  mkdir data\imports
+if not exist "%RUNDIR%"    mkdir "%RUNDIR%"
+if not exist "%LOGDIR%"    mkdir "%LOGDIR%"
+
+REM ------------------------------------------- ÒÑÔÚÔËĞĞ¼ì²é£¨PID ÎÄ¼ş£©
+if exist "%PIDFILE%" (
+  set "OLDPID="
+  for /f "usebackq delims=" %%P in ("%PIDFILE%") do set "OLDPID=%%P"
+  if not "!OLDPID!"=="" (
+    python -m scripts.service_helper alive !OLDPID! >nul 2>nul
+    if not errorlevel 1 (
+      echo NetOps ÒÑÔÚÔËĞĞ£¨PID !OLDPID!£©£¬ÈçĞèÖØÆôÇëÖ´ĞĞ restart.bat
+      popd
+      exit /b 0
+    )
+  )
+  del /q "%PIDFILE%" >nul 2>nul
 )
 
-cd /d "%ROOT%backend"
-if not exist data\backups mkdir data\backups
-if not exist data\reports mkdir data\reports
-if not exist data\imports mkdir data\imports
+REM ---------------------------------------------------- ¶Ë¿ÚÕ¼ÓÃ¼ì²â
+echo ==^> ¼ì²é¶Ë¿Ú %PORT%
+python -m scripts.service_helper port-busy %PORT% >nul 2>nul
+if not errorlevel 1 (
+  echo ¶Ë¿Ú %PORT% ÒÑ±»Õ¼ÓÃ£¬ÇëÏÈÊÍ·Å¸Ã¶Ë¿Ú
+  popd
+  exit /b 1
+)
 
-echo ==^> å¯åŠ¨ NetOps  -^>  http://localhost:%PORT%
-python -m uvicorn app.main:app --host 0.0.0.0 --port %PORT%
-endlocal
+REM ------------------------------------------------------------ Ç°Ì¨Ä£Ê½
+if "%FOREGROUND%"=="1" (
+  echo ==^> Ç°Ì¨Æô¶¯ NetOps  -^>  http://localhost:%PORT%
+  echo     °´ Ctrl+C Í£Ö¹
+  python -m uvicorn app.main:app --host %HOST% --port %PORT%
+  popd
+  exit /b %errorlevel%
+)
+
+REM ------------------------------------------------------------ ºóÌ¨Ä£Ê½
+echo ==^> ºóÌ¨Æô¶¯ NetOps
+
+REM ÈÕÖ¾°´´ÎÇĞ·Ö£¬±ÜÃâµ¥ÎÄ¼şÎŞÏŞÔö³¤
+if exist "%LOGFILE%" (
+  for %%F in ("%LOGFILE%") do (
+    if %%~zF GTR 5242880 (
+      move /y "%LOGFILE%" "%LOGDIR%\netops_%RANDOM%.log" >nul 2>nul
+    )
+  )
+)
+
+REM ÓÃ Python ÒÔ Windows Ô­Éú·ÖÀë±êÖ¾Æô¶¯ÍÑÀë¿ØÖÆÌ¨µÄ½ø³Ì£º
+REM   DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW | CREATE_BREAKAWAY_FROM_JOB
+REM ÕâÑù¸¸´°¿Ú / ÖÕ¶Ë¹Ø±Õºó·şÎñÈÔ¼ÌĞøÔËĞĞ¡£
+set "NEWPID="
+for /f "usebackq delims=" %%P in (`python -m scripts.service_helper spawn "%LOGFILE%" "%BACKEND%" python -m uvicorn app.main:app --host %HOST% --port %PORT% 2^>nul`) do set "NEWPID=%%P"
+
+if not defined NEWPID (
+  echo Æô¶¯Ê§°Ü£ºÎŞ·¨´´½¨ºóÌ¨½ø³Ì£¬Çë¼ì²éÈÕÖ¾£º%LOGFILE%
+  popd
+  exit /b 1
+)
+REM PID ÎÄ¼şÓÉ helper Í³Ò»ÓÃ LF »»ĞĞĞ´Èë
+REM £¨bat µÄ for /f ¶Á CRLF »á°Ñ \r ´ø½ø±äÁ¿£¬µ¼ÖÂ taskkill ÄÃµ½´íÎó PID£©
+python -m scripts.service_helper write-pid "%PIDFILE%" %NEWPID%
+REM ---------------------------------------------------- ½¡¿µ¼ì²éµÈ´ı¾ÍĞ÷
+echo ==^> µÈ´ı·şÎñ¾ÍĞ÷
+for /L %%I in (1,1,60) do (
+  python -m scripts.service_helper reachable %PORT% >nul 2>nul
+  if not errorlevel 1 goto ready
+  echo | set /p "=."
+  timeout /t 1 /nobreak >nul
+)
+goto not_ready
+
+:ready
+echo.
+echo     Æô¶¯³É¹¦£¨PID %NEWPID%£©
+echo     ·ÃÎÊµØÖ· : http://localhost:%PORT%
+echo     ÔËĞĞÈÕÖ¾ : %LOGFILE%
+echo     Í£Ö¹·şÎñ : stop.bat
+popd
+exit /b 0
+
+:not_ready
+echo.
+echo ·şÎñÔÚ 60 ÃëÄÚÎ´¾ÍĞ÷¡£×î½üÈÕÖ¾£º
+powershell -NoProfile -Command "Get-Content -Tail 20 '%LOGFILE%' -EA SilentlyContinue"
+echo ½ø³ÌÈÔÔÚÔËĞĞ£¬¿ÉÓÃ stop.bat Í£Ö¹
+popd
+exit /b 1

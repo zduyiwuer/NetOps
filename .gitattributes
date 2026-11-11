@@ -18,7 +18,9 @@
 *.txt      text eol=lf
 *.proto    text eol=lf
 *.sh       text eol=lf
-*.bat      text eol=lf crlf
+# bat 文件为 GBK 编码 + CRLF：cmd.exe 按本地代码页解析才能正确执行，
+# 必须标记为 binary 避免 git 做换行/编码转换把中文字节改坏。
+*.bat      binary
 Dockerfile text eol=lf
 .gitignore text eol=lf
 .dockerignore text eol=lf
