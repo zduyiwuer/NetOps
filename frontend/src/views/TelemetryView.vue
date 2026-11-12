@@ -19,7 +19,16 @@
         <div class="value" style="font-size: 20px" :class="status.collector_running ? 'text-ok' : 'text-muted'">
           {{ status.collector_running ? '运行中' : '未运行' }}
         </div>
-        <div class="foot">gNMI 端口 {{ status.collector_port || '-' }}</div>
+        <div class="foot">
+          gNMI 端口 {{ status.collector_port || '-' }}
+          <el-tooltip
+            v-if="status.collector_port_fallback"
+            content="标准端口 57400 当前不可用（可能被系统排除端口范围占用），已自动改用此端口。设备主动推送时，target 端口请填这个。"
+            placement="top"
+          >
+            <el-tag size="small" type="warning" effect="plain" style="margin-left: 4px">已回退</el-tag>
+          </el-tooltip>
+        </div>
       </div>
       <div class="stat-card">
         <div class="label"><el-icon><Connection /></el-icon>活跃会话</div>
@@ -227,7 +236,7 @@
           <template #title>
             {{
               configForm.mode === 'collector'
-                ? '设备主动连接平台 gNMI 服务（默认端口 57400）并推送遥测数据，平台侧无需额外配置目标地址。'
+                ? `设备主动连接平台 gNMI 服务（端口 ${status.collector_port || 57400}）并推送遥测数据，平台侧无需额外配置目标地址。`
                 : '平台主动连接设备的 gNMI 服务并订阅路径，需要填写设备地址与端口。'
             }}
           </template>

@@ -491,6 +491,18 @@ flow-export template timeout 60
 平台内置 gNMI 服务端（默认 **57400**），proto 定义与官方 openconfig/gnmi 规范一致，可直接对接
 Cisco IOS-XR、H3C Comware、Huawei VRP 等设备的 gNMI 服务。
 
+> **端口不可用时自动回退**：Windows 的「排除端口范围」（Hyper-V / WSL / Docker
+> 动态创建，可用 `netsh int ipv4 show excludedportrange protocol=tcp` 查看）
+> 会让落在其中的端口绑定时报 `Permission denied`——这类端口**没有进程占用、
+> netstat 也查不到**，很容易误判成「端口空闲」。
+> 平台启动前会先探测端口可用性，不可用时自动改用邻近的可用端口
+> （优先靠近 57400），并在「Telemetry 遥测」页与「采集服务」面板上
+> 以 **已回退** 标记提示**实际端口**。
+>
+> 设备采用 dial-out（主动推送到平台）时，target 端口需填**实际端口**，
+> 而不是标准端口 57400。也可以在「系统与智能 → 平台设置」里手动指定端口，
+> 改完立即重启生效。
+
 **两种工作模式**
 
 | 模式 | 说明 | 配置 |
@@ -635,6 +647,9 @@ python -m scripts.verify_new_features   # 28 项：表格无横向滚动、无�
 
 # 20. 启动窗口与飞塔内存采集验证（需先启动后端服务）
 python -m scripts.verify_startup_and_fg_mem  # 15 项：无 cmd 窗口残留、关窗后服务存活、飞塔内存/CPU 解析
+
+# 21. gNMI 开关与端口回退验证（需先启动后端服务）
+python -m scripts.verify_gnmi_switch      # 17 项：端口可用性检测、端口回退、开关反复切换、状态如实反馈
 ```
 
 > 容器内运行验证脚本时，需先启动服务并把 `BASE` 指向容器地址。
@@ -729,7 +744,7 @@ python -m scripts.verify_startup_and_fg_mem  # 15 项：无 cmd 窗口残留、�
 | 通道 | 说明 |
 | --- | --- |
 | SNMP 轮询 | 平台主动轮询，关闭后仅保留其他调度任务 |
-| Telemetry（gNMI） | 关闭时释放 57400 端口，重新开启立即恢复监听 |
+| Telemetry（gNMI） | 关闭时释放监听端口，重新开启立即恢复监听（端口被系统排除时会自动回退到可用端口） |
 | NetFlow / IPFIX | 关闭时释放 2055/4739/9995 端口 |
 | Syslog 接收 | 关闭时释放 5514 端口 |
 

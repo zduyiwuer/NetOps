@@ -949,11 +949,28 @@ async function testAi() {
   else ElMessage.warning(res.message)
 }
 
+const COLLECTOR_LABEL = {
+  snmp: 'SNMP 轮询',
+  telemetry: 'gNMI 遥测',
+  netflow: 'NetFlow 采集',
+  syslog: 'Syslog 接收',
+}
+
 async function toggleCollector(target, enabled) {
   toggling.value = target
   try {
-    await settingsApi.toggleCollector(target, enabled)
-    ElMessage.success(`${target} 已${enabled ? '启用' : '关闭'}`)
+    const res = await settingsApi.toggleCollector(target, enabled)
+    // 后端会如实返回实际启停结果——失败时要明确提示，
+    // 否则界面显示「已启用」而服务其实没起来，很难排查
+    if (res && res.actually_applied === false) {
+      ElMessage.error({
+        message: res.message || `${COLLECTOR_LABEL[target] || target} 启动失败`,
+        duration: 8000,
+        showClose: true,
+      })
+    } else {
+      ElMessage.success(`${COLLECTOR_LABEL[target] || target} 已${enabled ? '启用' : '关闭'}`)
+    }
     await loadSettings()
   } catch (e) {
     /* 忽略 */

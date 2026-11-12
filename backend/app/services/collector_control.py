@@ -174,6 +174,14 @@ async def apply_switches(changes: Dict[str, Any]) -> Dict[str, Any]:
         else:
             result["collector.telemetry_enabled"] = await stop_gnmi()
 
+    # 端口变更：若 gNMI 正在运行，需要用新端口重启才生效
+    elif "collector.gnmi_port" in changes:
+        if bool(cfg.get("collector.telemetry_enabled")):
+            await stop_gnmi()
+            result["collector.gnmi_port"] = await start_gnmi(
+                int(cfg.get("collector.gnmi_port") or 57400)
+            )
+
     # NetFlow
     if "collector.netflow_enabled" in changes:
         want = bool(cfg.get("collector.netflow_enabled"))
@@ -206,6 +214,9 @@ def status() -> Dict[str, Any]:
     sched = get_scheduler()
     tel = telemetry_status()
     snmp_running = sched.running and sched.get_job("collect_all") is not None
+    tel_detail = f"端口 {tel['collector_port']} · 会话 {len(tel['sessions'])}"
+    if tel.get("collector_port_fallback"):
+        tel_detail += "（标准端口不可用，已自动回退；设备推送需用此端口）"
     return {
         "snmp": {
             "running": snmp_running,
@@ -215,7 +226,7 @@ def status() -> Dict[str, Any]:
         "telemetry": {
             "running": tel["collector_running"],
             "desc": "gNMI 流式遥测服务（设备订阅 / 平台订阅）",
-            "detail": f"端口 {tel['collector_port']} · 会话 {len(tel['sessions'])}",
+            "detail": tel_detail,
         },
         "netflow": {
             "running": _netflow_collector is not None,

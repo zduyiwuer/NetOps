@@ -75,6 +75,15 @@ class CollectorSwitch(BaseModel):
     enabled: bool = True
 
 
+# 采集通道的中文名（用于错误提示）
+_TARGET_LABEL = {
+    "snmp": "SNMP 轮询",
+    "telemetry": "gNMI 遥测",
+    "netflow": "NetFlow 采集",
+    "syslog": "Syslog 接收",
+}
+
+
 @settings_router.post("/collector/toggle")
 async def toggle_collector(
     payload: CollectorSwitch,
@@ -97,8 +106,25 @@ async def toggle_collector(
         db, user.username, "collector.toggle", payload.target,
         {"enabled": payload.enabled}, "",
     )
-    return {"ok": True, "target": payload.target, "enabled": payload.enabled, "applied": applied,
-            "collector": collector_status()}
+    # applied 里对应项为 False 表示**实际**启停失败——设置值改了但服务没起来。
+    # 必须如实告诉前端，否则界面会显示「已启用」而实际没开。
+    actually_applied = applied.get(key, True)
+    message = ""
+    if not actually_applied:
+        message = (
+            f"{_TARGET_LABEL.get(payload.target, payload.target)} 启动失败："
+            "监听端口不可用（可能被系统排除端口范围占用或被其它程序占用），"
+            "请查看日志，或在平台设置中手动指定其它端口"
+        )
+    return {
+        "ok": True,
+        "target": payload.target,
+        "enabled": payload.enabled,
+        "applied": applied,
+        "actually_applied": actually_applied,
+        "message": message,
+        "collector": collector_status(),
+    }
 
 
 # ================================================================ 拓扑

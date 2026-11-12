@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.collectors.engine import rate_tracker
 from app.collectors.telemetry import (
+    DEFAULT_GNMI_PORT,
     PathMapping,
     TelemetryCollectorServer,
     TelemetryClientSession,
@@ -291,6 +292,48 @@ def _build_mapper(db: Session) -> TelemetryPathMapper:
     return TelemetryPathMapper(extra_mappings=extra)
 
 
+def _port_bindable(port: int, host: str = "0.0.0.0") -> bool:
+    """端口能否被绑定。
+
+    Windows 的「排除端口范围」（Hyper-V / WSL / Docker 动态创建，
+    可用 ``netsh int ipv4 show excludedportrange protocol=tcp`` 查看）
+    会让落在其中的端口绑定时报 ``Permission denied``——
+    这类端口既没有进程占用，netstat 也查不到，很容易误判成「端口空闲」。
+    """
+    import socket
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind((host, port))
+        return True
+    except OSError:
+        return False
+    finally:
+        sock.close()
+
+
+def resolve_gnmi_port(preferred: int, search_span: int = 200) -> tuple[int, bool]:
+    """解析实际可用的 gNMI 监听端口，返回 (端口, 是否发生回退)。
+
+    优先使用配置的标准端口 57400；若被系统排除或被其它进程占用，
+    则在邻近范围里找一个可用端口，保证「关掉后还能重新打开」。
+
+    回退后设备若采用 dial-out（主动推送到平台），
+    需要把设备侧的 target 端口改成实际端口——该端口会写入状态接口展示。
+    """
+    if _port_bindable(preferred):
+        return preferred, False
+    # 先往下找，再往上找（优先靠近标准端口）
+    for offset in range(1, search_span + 1):
+        for cand in (preferred - offset, preferred + offset):
+            if cand < 1024 or cand > 65535:
+                continue
+            if _port_bindable(cand):
+                return cand, True
+    return preferred, False
+
+
 # ---------------------------------------------------------------- 生命周期
 async def start_telemetry_services(gnmi_port: int = 57400) -> bool:
     """启动 gNMI collector 服务端与已启用的 client 会话。"""
@@ -306,10 +349,19 @@ async def start_telemetry_services(gnmi_port: int = 57400) -> bool:
     finally:
         db.close()
 
+    # 端口可用性预检：标准端口可能被 Windows 排除范围占用而无法绑定
+    actual_port, fallback = resolve_gnmi_port(gnmi_port)
+    if fallback:
+        logger.warning(
+            "gNMI 标准端口 %s 不可用（可能落在系统排除端口范围或被占用），"
+            "自动改用端口 %s。设备采用 dial-out 推送时需把 target 端口改为 %s",
+            gnmi_port, actual_port, actual_port,
+        )
+
     collector_server = TelemetryCollectorServer(on_samples, resolve_device_by_peer, mapper)
-    if not await collector_server.start(gnmi_port):
+    if not await collector_server.start(actual_port):
         collector_server = None
-        logger.warning("gNMI collector 启动失败，端口 %s 可能被占用", gnmi_port)
+        logger.warning("gNMI collector 启动失败，端口 %s 可能被占用", actual_port)
         return False
 
     # 启动 client 模式会话
@@ -385,5 +437,12 @@ def telemetry_status() -> Dict[str, Any]:
     return {
         "collector_running": collector_server is not None,
         "collector_port": collector_server.port if collector_server else None,
+        # 实际端口与标准端口不一致时，说明发生了回退——
+        # 设备采用 dial-out 推送时必须用这个端口
+        "collector_port_fallback": (
+            collector_server.port != DEFAULT_GNMI_PORT
+            if collector_server and collector_server.port
+            else False
+        ),
         "sessions": sessions,
     }
