@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import random
 import time
 from dataclasses import dataclass, field
@@ -14,6 +15,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from app.collectors.snmp import SnmpClient, SnmpError, target_from_device
 from app.collectors.ssh import SshClient, SshError
+from app.db.session import SessionLocal
 from app.collectors.vendors import (
     OID_IF_ADMIN_STATUS,
     OID_IF_ALIAS,
@@ -36,6 +38,9 @@ from app.collectors.vendors import (
     VendorProfile,
     resolve_vendor,
 )
+
+logger = logging.getLogger("netops.collector.engine")
+
 
 @dataclass
 class InterfaceSample:
@@ -154,8 +159,8 @@ class Collector:
                     ssh_sample = await self._collect_ssh_fallback()
                     sample.interfaces = ssh_sample.interfaces
                     sample.system = ssh_sample.system
-                except Exception:
-                    pass
+                except Exception as exc:
+                    self._log_ssh_failure("整体采集兜底", exc)
             return sample
 
     # ---------------------------------------------------------- SNMP
@@ -169,6 +174,11 @@ class Collector:
             result = await client.get(sys_oids)
             sample.system.response_ms = result.elapsed_ms
             values = result.values
+            # 配置里的 community 带冗余后缀时，SNMP 客户端会自动清洗并重试。
+            # 这里把清洗后的值写回设备配置——否则每次采集都要先超时一次，
+            # 白白多花几秒。
+            if result.effective_community and result.effective_community != self.device.snmp_community:
+                self._fix_snmp_community(result.effective_community)
             sample.system.uptime_sec = _as_int(values.get(OID_SYS_UPTIME))
             # SNMP 的 sysUpTime 是 Timeticks（单位 1/100 秒），
             # 直接当秒用会让运行时长偏大 100 倍
@@ -193,6 +203,33 @@ class Collector:
             elif mem_used is not None:
                 sample.system.mem_used_mb = mem_used
 
+            # 3) 带索引的表型指标：GET 取不到时改用 WALK
+            #    例：Catalyst 2960 的 cpmCPUTotal5minRev 在 .1.5.11、
+            #        ciscoMemoryPoolUsed 在 .48.1.1.1.5.1 —— 都是表而非标量
+            if sample.system.cpu_usage is None and self.vendor.cpu_walk_oids:
+                walked = await _walk_first(client, self.vendor.cpu_walk_oids)
+                if walked is not None:
+                    sample.system.cpu_usage = walked
+
+            if (
+                self.vendor.mem_used_walk_oids
+                and sample.system.mem_usage is None
+                and sample.system.mem_total_mb is None
+            ):
+                used_b = await _walk_first(client, self.vendor.mem_used_walk_oids)
+                free_b = (
+                    await _walk_first(client, self.vendor.mem_free_walk_oids)
+                    if self.vendor.mem_free_walk_oids
+                    else None
+                )
+                if used_b is not None:
+                    # 内存池语义：total = used + free（单位字节 → MB）
+                    total_bytes = used_b + (free_b or 0)
+                    if total_bytes > 0:
+                        sample.system.mem_total_mb = round(total_bytes / 1024 / 1024, 2)
+                        sample.system.mem_used_mb = round(used_b / 1024 / 1024, 2)
+                        sample.system.mem_usage = round(used_b / total_bytes * 100, 2)
+
             # 厂商特有指标（连接数 / AP 数 / 会话数等）
             for name, oids in self.vendor.extra_oids.items():
                 val = _pick(values, oids)
@@ -208,8 +245,8 @@ class Collector:
             if self.device.ssh_username and self.device.ssh_password:
                 try:
                     await self._enrich_via_ssh(sample)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    self._log_ssh_failure("CPU/内存补采", exc)
 
         # 4) 厂商特有指标：SNMP 缺失时用 SSH 兜底
         if collect_system and self.vendor.extra_ssh_cmds:
@@ -224,8 +261,8 @@ class Collector:
                     extra = await ssh.fetch_extra_metrics()
                     for name, value in extra.items():
                         sample.system.extra.setdefault(name, value)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    self._log_ssh_failure("厂商特有指标补采", exc)
 
         sample.system.reachable = True
         return sample
@@ -348,6 +385,89 @@ class Collector:
                 else:
                     sample.system.mem_used_mb = None
                 sample.system.source = "ssh"
+
+    def _log_ssh_failure(self, scene: str, exc: Exception) -> None:
+        """SSH 兜底失败时写入系统日志。
+
+        这些分支原本是静默 pass，导致「某些指标采不到」时完全无从查证。
+        这里记录失败场景与原因——老设备常见的失败是
+        "no acceptable kex algorithm"（paramiko 5 已移除 group1-sha1 等老算法）。
+        """
+        msg = str(exc)
+        hint = ""
+        low = msg.lower()
+        if "kex algorithm" in low:
+            hint = (
+                "该设备只支持较老的密钥交换算法（如 diffie-hellman-group1-sha1），"
+                "而当前 paramiko 5.x 已将其移除，因此无法建立 SSH 连接。"
+                "SNMP 采集不受影响；如需 CLI 采集，可考虑升级设备固件。"
+            )
+        elif "host key" in low:
+            hint = (
+                "该设备使用的主机密钥算法较旧（如 ssh-rsa / ssh-dss），"
+                "当前 paramiko 5.x 已不再接受，因此无法建立 SSH 连接。"
+                "SNMP 采集不受影响；如需 CLI 采集，可考虑升级设备固件，"
+                "或在设备侧改用现代算法。"
+            )
+        elif not hint:
+            hint = "SNMP 采集不受影响，仅依赖 CLI 的指标会缺失。"
+        try:
+            from app.services import system_log_service
+
+            system_log_service.write_log(
+                system_log_service.LEVEL_WARNING,
+                system_log_service.CAT_COLLECTOR,
+                "collector",
+                f"设备 {self.device.name} 的 SSH {scene}失败：{msg}",
+                hint,
+                device_id=self.device.id,
+                context={
+                    "device_id": self.device.id,
+                    "device_name": self.device.name,
+                    "scene": scene,
+                    "host": self.device.ip,
+                },
+            )
+        except Exception:
+            pass
+
+    def _fix_snmp_community(self, effective: str) -> None:
+        """把自动清洗后的 community 写回设备配置。
+
+        配置里的 community 带 " ro"/" rw" 这类冗余后缀时，
+        设备会当作错误的 community 直接丢弃（表现为超时而非认证失败）。
+        既然已经确认清洗后的值可用，就顺手把配置改对——
+        否则每次采集都要先超时一次，白白多花几秒。
+
+        用独立的 UPDATE 语句而不是改 ORM 属性：
+        self.device 属于调用方的 session，
+        直接改属性要等调用方 commit 才落库，
+        而采集链路上的调用方未必会提交。
+        """
+        try:
+            from sqlalchemy import update
+
+            from app.models.models import Device
+
+            old = self.device.snmp_community
+            db = SessionLocal()
+            try:
+                db.execute(
+                    update(Device)
+                    .where(Device.id == self.device.id)
+                    .values(snmp_community=effective)
+                )
+                db.commit()
+            finally:
+                db.close()
+            # 同步内存中的对象，避免同一 session 内后续仍用旧值
+            self.device.snmp_community = effective
+            logger.info(
+                "已把设备 %s 的 SNMP community 从 %r 修正为 %r",
+                self.device.name, old, effective,
+            )
+        except Exception as exc:
+            logger.debug("修正 SNMP community 失败: %s", exc)
 
     def _ssh_client(self) -> SshClient:
         return SshClient(
@@ -489,6 +609,31 @@ def _pick(values: Dict[str, Any], oids: List[str]) -> Optional[float]:
     for oid in oids:
         if oid in values:
             num = _as_int(values[oid])
+            if num is not None:
+                return float(num)
+    return None
+
+
+async def _walk_first(client: Any, oids: List[str]) -> Optional[float]:
+    """WALK 遍历候选根 OID，取第一个有效数值。
+
+    有一类设备的 CPU / 内存指标是**带索引的表**而非标量，
+    例如 Catalyst 2960 的 cpmCPUTotal5minRev 实际在 .1.5.11、
+    ciscoMemoryPoolUsed 在 .48.1.1.1.5.1——
+    用固定 OID 做 GET 只会得到 "No Such Instance"。
+    WALK 遍历后按 OID 排序取第一个（即索引最小的那个，
+    通常对应主实例，如 Processor 池）。
+    """
+    for root in oids:
+        try:
+            result = await client.walk(root)
+        except Exception as exc:
+            logger.debug("SNMP WALK %s 失败: %s", root, exc)
+            continue
+        if not result.ok or not result.values:
+            continue
+        for oid in sorted(result.values.keys()):
+            num = _as_int(result.values[oid])
             if num is not None:
                 return float(num)
     return None

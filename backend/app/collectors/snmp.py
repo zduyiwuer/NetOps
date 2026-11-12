@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -49,9 +50,29 @@ PRIV_PROTOCOLS = {
     "AES256": usmAesCfb256Protocol,
 }
 
+logger = logging.getLogger("netops.snmp")
+
 
 class SnmpError(Exception):
     """SNMP 采集异常。"""
+
+
+def _strip_access_suffix(community: str) -> str:
+    """去掉 community 尾部冗余的访问级别后缀（" ro" / " rw"）。
+
+    很多设备配置里会写成 ``xxx ro`` 这种带访问级别的形式，
+    但 SNMP community 本身只能是纯字符串——设备收到 ``xxx ro``
+    会当成错误的 community 直接丢弃，表现为**超时**而不是认证失败，
+    现场极难定位。返回清洗后的值；无需清洗时返回空串。
+    """
+    if not community:
+        return ""
+    stripped = community.rstrip()
+    lowered = stripped.lower()
+    for suffix in (" ro", " rw"):
+        if lowered.endswith(suffix):
+            return stripped[: -len(suffix)].rstrip()
+    return ""
 
 
 @dataclass
@@ -89,6 +110,9 @@ class SnmpResult:
     values: Dict[str, Any] = field(default_factory=dict)
     error: str = ""
     elapsed_ms: float = 0.0
+    # 实际使用的 community——当配置值带冗余后缀而被自动清洗时，
+    # 这里记录清洗后的值，供上层修正设备配置
+    effective_community: str = ""
 
 
 def _decode(value: Any) -> Any:
@@ -156,6 +180,16 @@ class SnmpClient:
 
     def __init__(self, target: SnmpTarget):
         self.target = target
+        # community 被自动清洗后记住它，后续 WALK 也用清洗后的值
+        self._effective_community = ""
+
+    def _auth_data(self):
+        """构造认证信息（优先用清洗后的 community）。"""
+        community = self._effective_community or self.target.community
+        if self.target.version == "3":
+            return self.target.auth_data()
+        mp_model = 0 if self.target.version in ("1", "v1") else 1
+        return CommunityData(community or "public", mpModel=mp_model)
 
     async def _transport(self) -> UdpTransportTarget:
         return await UdpTransportTarget.create(
@@ -169,13 +203,61 @@ class SnmpClient:
         oid_list = list(oids)
         if not oid_list:
             return SnmpResult(ok=True, values={})
+        result = await self._get_once(oid_list)
+        # community 尾部带 " ro"/" rw" 时（从别处复制配置常带上的习惯）
+        # 设备会当作错误的 community 直接丢弃，表现是**超时**而非认证失败，
+        # 很难自行定位。这里自动去掉尾缀再试一次。
+        if not result.ok and self.target.version != "3":
+            cleaned = _strip_access_suffix(self.target.community)
+            if cleaned:
+                retry = await self._get_once(oid_list, community=cleaned)
+                if retry.ok:
+                    logger.warning(
+                        "SNMP community 尾部含冗余的访问级别后缀，已自动改用 %s 采集 %s",
+                        cleaned, self.target.host,
+                    )
+                    retry.effective_community = cleaned
+                    # 记住清洗后的值，后续 WALK 也用它
+                    self._effective_community = cleaned
+                    try:
+                        from app.services import system_log_service
+
+                        system_log_service.write_log(
+                            system_log_service.LEVEL_WARNING,
+                            system_log_service.CAT_COLLECTOR,
+                            "snmp",
+                            f"设备 {self.target.host} 的 SNMP community 尾部含冗余后缀，已自动去除",
+                            f"配置值：{self.target.community!r}；实际使用：{cleaned!r}。"
+                            "SNMP community 只能是纯字符串，设备收到带后缀的值会当作"
+                            "错误的 community 直接丢弃（表现为超时而非认证失败）。"
+                            "平台已自动改用清洗后的值，建议同步更新设备配置。",
+                            context={
+                                "host": self.target.host,
+                                "configured_community": self.target.community,
+                                "effective_community": cleaned,
+                            },
+                        )
+                    except Exception:
+                        pass
+                    return retry
+        return result
+
+    async def _get_once(
+        self, oid_list: List[str], community: Optional[str] = None
+    ) -> SnmpResult:
+        """执行一次 GET（可指定临时 community）。"""
         started = time.perf_counter()
         try:
             engine = SnmpEngine()
             transport = await self._transport()
+            auth = self._auth_data()
+            if community is not None and self.target.version != "3":
+                # 用临时 community 重新构造认证信息
+                mp_model = 0 if self.target.version in ("1", "v1") else 1
+                auth = CommunityData(community, mpModel=mp_model)
             err_ind, err_status, err_idx, var_binds = await get_cmd(
                 engine,
-                self.target.auth_data(),
+                auth,
                 transport,
                 ContextData(),
                 *[ObjectType(ObjectIdentity(oid)) for oid in oid_list],
@@ -208,7 +290,7 @@ class SnmpClient:
             transport = await self._transport()
             async for err_ind, err_status, err_idx, var_binds in walk_cmd(
                 engine,
-                self.target.auth_data(),
+                self._auth_data(),
                 transport,
                 ContextData(),
                 ObjectType(ObjectIdentity(root_oid)),
@@ -248,7 +330,7 @@ class SnmpClient:
             for _ in range(max_rounds):
                 err_ind, err_status, err_idx, var_binds = await bulk_cmd(
                     engine,
-                    self.target.auth_data(),
+                    self._auth_data(),
                     transport,
                     ContextData(),
                     0,

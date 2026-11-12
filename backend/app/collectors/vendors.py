@@ -82,6 +82,17 @@ class VendorProfile:
     version_cmd: List[str] = field(default_factory=list)
     interface_bulk: bool = True
 
+    # ---- 需要 WALK 才能取到的指标 ----
+    # 有一类设备的 CPU / 内存指标是**带索引的表**（不是标量），
+    # 例如 Catalyst 2960 的 cpmCPUTotal5minRev 在 .1.3.11 / .1.5.11，
+    # ciscoMemoryPoolUsed 在 .48.1.1.1.5.1 —— 用固定 OID 做 GET 只会得到
+    # "No Such Instance"。这些 OID 用 WALK 遍历后取第一个有效值。
+    # 仅在常规 GET 取不到时才 WALK，避免无谓的网络开销。
+    cpu_walk_oids: List[str] = field(default_factory=list)
+    # 内存「已用」与「空闲」两张表，total = used + free（内存池语义）
+    mem_used_walk_oids: List[str] = field(default_factory=list)
+    mem_free_walk_oids: List[str] = field(default_factory=list)
+
     def all_sys_oids(self) -> List[str]:
         oids: List[str] = []
         for group in (self.cpu_oids, self.mem_total_oids, self.mem_used_oids, self.temperature_oids):
@@ -131,6 +142,21 @@ VENDORS: Dict[str, VendorProfile] = {
         mem_used_oids=[
             "1.3.6.1.4.1.9.9.48.1.1.1.5",
             "1.3.6.1.4.1.9.2.1.46",
+        ],
+        # CISCO-PROCESS-MIB 的 CPU 指标是带索引的表
+        # (Catalyst 2960 实测在 .1.3.11 / .1.5.11，索引由实体号决定)，
+        # 固定 OID 做 GET 只会拿到 No Such Instance，必须 WALK
+        cpu_walk_oids=[
+            "1.3.6.1.4.1.9.9.109.1.1.1.1.5",  # cpmCPUTotal5minRev
+            "1.3.6.1.4.1.9.9.109.1.1.1.1.3",  # cpmCPUTotal5secRev
+        ],
+        # CISCO-MEMORY-POOL-MIB: Processor 池的 used / free 都是带索引的表,
+        # 总内存 = used + free (单位字节)
+        mem_used_walk_oids=[
+            "1.3.6.1.4.1.9.9.48.1.1.1.5",  # ciscoMemoryPoolUsed
+        ],
+        mem_free_walk_oids=[
+            "1.3.6.1.4.1.9.9.48.1.1.1.6",  # ciscoMemoryPoolFree
         ],
         cpu_ssh_cmd=["show processes cpu | include CPU utilization"],
         mem_ssh_cmd=["show memory statistics"],

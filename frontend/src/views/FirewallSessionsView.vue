@@ -6,6 +6,24 @@
         <span class="sub">防火墙实时会话数与并发情况</span>
       </h2>
       <div class="toolbar">
+        <el-select
+          v-model="selectedDeviceId"
+          placeholder="全部防火墙"
+          clearable
+          size="small"
+          style="width: 190px"
+          @change="onDeviceChange"
+        >
+          <el-option
+            v-for="d in items"
+            :key="d.device_id"
+            :label="d.name"
+            :value="d.device_id"
+          >
+            <span>{{ d.name }}</span>
+            <span class="opt-value">{{ d.value != null ? d.value : '-' }}</span>
+          </el-option>
+        </el-select>
         <el-radio-group v-model="hours" size="small" @change="load">
           <el-radio-button :value="1">最近数据</el-radio-button>
           <el-radio-button :value="6">6 小时</el-radio-button>
@@ -20,17 +38,17 @@
       <div class="stat-card">
         <div class="label"><el-icon><Share /></el-icon>防火墙设备</div>
         <div class="value" style="font-size: 20px">{{ items.length }}</div>
-        <div class="foot">已启用并纳入监控</div>
+        <div class="foot">{{ selectedDevice ? `已选中 ${selectedDevice.name}` : '已启用并纳入监控' }}</div>
       </div>
       <div class="stat-card">
         <div class="label"><el-icon><Connection /></el-icon>会话总数</div>
         <div class="value" style="font-size: 20px">{{ totalSessions }}</div>
-        <div class="foot">所有防火墙当前会话/连接数之和</div>
+        <div class="foot">{{ selectedDevice ? '当前选中防火墙' : '所有防火墙当前会话/连接数之和' }}</div>
       </div>
       <div class="stat-card">
-        <div class="label"><el-icon><TrendCharts /></el-icon>最高单台</div>
-        <div class="value" style="font-size: 20px">{{ maxSession }}</div>
-        <div class="foot">{{ maxSessionDevice || '暂无数据' }}</div>
+        <div class="label"><el-icon><TrendCharts /></el-icon>{{ selectedDevice ? '并发峰值' : '最高单台' }}</div>
+        <div class="value" style="font-size: 20px">{{ selectedDevice ? selectedPeak : maxSession }}</div>
+        <div class="foot">{{ selectedDevice ? selectedDevice.metric_label : (maxSessionDevice || '暂无数据') }}</div>
       </div>
       <div class="stat-card">
         <div class="label"><el-icon><Warning /></el-icon>离线设备</div>
@@ -49,7 +67,16 @@
           数据来自设备采集时的厂商专属指标，采集后自动更新
         </span>
       </div>
-      <el-table v-loading="loading" :data="items" size="small" stripe empty-text="暂无防火墙设备">
+      <el-table
+        v-loading="loading"
+        :data="items"
+        size="small"
+        stripe
+        empty-text="暂无防火墙设备"
+        highlight-current-row
+        :row-class-name="rowClass"
+        @current-change="onRowClick"
+      >
         <el-table-column label="设备名称" min-width="160">
           <template #default="{ row }">
             <el-link type="primary" :underline="false" @click="$router.push(`/device/${row.device_id}`)">
@@ -112,12 +139,30 @@ const loading = ref(false)
 const hours = ref(1)
 const trend = ref({ items: [], metric_key: 'session_count', metric_label: '会话数' })
 const trendDevice = ref(null)
+// 选中的防火墙（null = 全部）
+const selectedDeviceId = ref(null)
 
 const AXIS = { color: '#6b7280', fontSize: 11 }
 const SPLIT = { lineStyle: { color: '#eef1f5' } }
 
+const selectedDevice = computed(() =>
+  selectedDeviceId.value
+    ? items.value.find((r) => r.device_id === selectedDeviceId.value) || null
+    : null,
+)
+
+// 选中设备时，统计只看这一台
+const scopedItems = computed(() =>
+  selectedDevice.value ? [selectedDevice.value] : items.value,
+)
+
+const selectedPeak = computed(() => {
+  const v = selectedDevice.value?.peak
+  return v != null ? v : '-'
+})
+
 const totalSessions = computed(() =>
-  items.value.reduce((sum, r) => sum + (r.value ?? 0), 0),
+  scopedItems.value.reduce((sum, r) => sum + (r.value ?? 0), 0),
 )
 const maxSession = computed(() => {
   const vals = items.value.filter((r) => r.value != null).map((r) => r.value)
@@ -182,12 +227,18 @@ async function load() {
   try {
     const res = await monitorApi.firewallSessions(hours.value)
     items.value = res.items || []
-    // 默认展示会话数最多的那台设备
-    const top = items.value
-      .filter((r) => r.value != null)
-      .sort((a, b) => b.value - a.value)[0]
-    if (top) {
-      await loadTrend(top)
+    // 已选的设备若已不在列表中（被删除/下线），清空选择
+    if (selectedDeviceId.value && !items.value.some((r) => r.device_id === selectedDeviceId.value)) {
+      selectedDeviceId.value = null
+    }
+    // 趋势图：优先展示选中设备；未选中则默认展示会话数最多的那台
+    const target =
+      selectedDevice.value ||
+      items.value
+        .filter((r) => r.value != null)
+        .sort((a, b) => b.value - a.value)[0]
+    if (target) {
+      await loadTrend(target)
     } else {
       trendDevice.value = null
       trend.value = { items: [] }
@@ -209,6 +260,23 @@ async function loadTrend(row) {
   }
 }
 
+// 下拉选择设备
+function onDeviceChange() {
+  load()
+}
+
+// 点击表格行选中该防火墙（再点一次取消）
+function onRowClick(row) {
+  if (!row) return
+  selectedDeviceId.value =
+    selectedDeviceId.value === row.device_id ? null : row.device_id
+  load()
+}
+
+function rowClass({ row }) {
+  return selectedDeviceId.value === row.device_id ? 'row-selected' : ''
+}
+
 onMounted(load)
 onUnmounted(() => {})
 </script>
@@ -218,5 +286,18 @@ onUnmounted(() => {})
   font-size: 18px;
   font-weight: 600;
   color: var(--netops-primary);
+}
+
+/* 下拉选项右侧的会话数 */
+.opt-value {
+  float: right;
+  color: var(--netops-text-muted, #909399);
+  font-family: monospace;
+  margin-left: 12px;
+}
+
+/* 选中的防火墙行高亮 */
+:deep(.el-table__row.row-selected) {
+  background: var(--netops-primary-light, #ecf5ff) !important;
 }
 </style>

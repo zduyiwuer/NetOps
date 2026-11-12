@@ -288,10 +288,36 @@ python -u -m scripts.verify_service    # 54 项：脚本齐全性、编码、hel
 > 各厂商私有 OID 在不同型号/固件上可能不同，平台按候补顺序自动回退；
 > 若全部失败则改走 SSH 采集。
 
+### SNMP 采集的三个兼容性处理
+
+真实网络环境里 SNMP 常有三个坑，平台都做了兜底：
+
+| 问题 | 现象 | 平台处理 |
+| --- | --- | --- |
+| community 带冗余后缀（如 `xxx ro`） | **超时**而非认证失败，极难定位 | 自动去掉尾部 ` ro`/` rw` 重试；成功后把清洗后的值**写回设备配置**，并记入系统日志 |
+| 指标是**带索引的表**（如 Catalyst 2960 的 `cpmCPUTotal5minRev` 实际在 `.1.5.11`） | 固定 OID 做 GET 得到 `No Such Instance` | 常规 GET 取不到时自动改用 **WALK**，取索引最小的那个值 |
+| 内存用「已用 + 空闲」两张表表达（如 `ciscoMemoryPoolUsed`/`Free`） | 单取一张会把空闲当总量 | 自动组合，`总内存 = used + free` |
+
+表型 OID 采集到的值单位是**字节**，平台会换算成 MB。
+
 ### 支持的设备类型明细
 
 平台内置 **8 个厂商画像**（4 个交换机 + 3 个安全/无线设备 + 通用回退），
 下表列出每类的配置要点与差异。
+
+#### Cisco IOS/NXOS 交换机（`cisco`）
+
+| 项目 | 内容 |
+| --- | --- |
+| netmiko 类型 | `cisco_ios` |
+| CPU | `CISCO-PROCESS-MIB` 的 `cpmCPUTotal5minRev`（**带索引的表**，需 WALK）→ HOST-RESOURCES-MIB |
+| 内存 | `CISCO-MEMORY-POOL-MIB` 的 `ciscoMemoryPoolUsed` + `ciscoMemoryPoolFree`（同为表，需 WALK），总内存 = 两者之和 |
+| SSH 兜底 | `show processes cpu` / `show memory statistics` |
+
+> 实测 Catalyst 2960（Gibraltar / IOS 12.4）：
+> CPU 在 `1.3.6.1.4.1.9.9.109.1.1.1.1.5.11`、内存池在 `.1.1.1.5.1`——
+> 索引由设备实体号决定，不能写死。用固定 OID 做 GET 只会得到 `No Such Instance`，
+> 平台因此改用 WALK 遍历后取值。
 
 #### Cisco ASA 防火墙（`cisco_asa`）
 
@@ -656,6 +682,9 @@ python -m scripts.verify_system_log        # 15 项：系统日志标签页、�
 
 # 23. 端口不可用时是否写入系统日志（需先启动后端服务）
 python -m scripts.verify_port_occupied_logged  # 6 项：占用端口触发回退，校验日志级别/分类/上下文/去重
+
+# 24. 防火墙设备选择 + Cisco 交换机采集（需先启动后端服务）
+python -m scripts.verify_fw_select_and_cisco  # 17 项：设备选择交互、Cisco CPU/内存/接口采集、community 自动修正
 ```
 
 > 容器内运行验证脚本时，需先启动服务并把 `BASE` 指向容器地址。
@@ -935,6 +964,8 @@ curl -X POST http://localhost:8900/api/devices/probe/batch \
 - **汇总卡片** —— 防火墙设备数、会话总数、最高单台、离线设备数
 - **设备一览** —— 每台防火墙的当前会话/连接数、并发峰值、在线状态、采集时间
 - **会话趋势** —— 会话数随时间变化曲线（可切 6 小时 / 24 小时）
+- **按设备查看** —— 顶部下拉可选择指定防火墙，也可直接点击表格行选中；
+  选中后汇总卡片与趋势图切换为该设备的会话数与曲线，再点一次取消选中
 
 设备详情页也会为防火墙设备显示会话卡片与会话趋势图。
 
