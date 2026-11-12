@@ -73,6 +73,15 @@ async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
     _migrate_schema()
     init_data()
+    # 系统日志：把应用的告警/错误自动落库（需在建表之后安装）
+    from app.services import system_log_service
+
+    system_log_service.setup()
+    import logging as _lg
+    logger.info(
+        "系统日志处理器已安装，root handlers=%s",
+        [type(h).__name__ for h in _lg.getLogger().handlers],
+    )
     # 调度器
     from app.services.scheduler import start_scheduler, shutdown_scheduler
 

@@ -344,6 +344,42 @@ class AuditLog(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
 
 
+class SystemLog(Base):
+    """平台自身的运行日志（系统级问题）。
+
+    与设备日志（device_logs，设备侧产生的 syslog / SSH 日志）区分开：
+    这里记录的是**平台自身**的问题，例如
+    - 采集器因端口被占用 / 被系统排除端口范围而无法启动
+    - 调度任务执行异常
+    - 数据库、存储、配置等系统级故障
+
+    目的：让「某个功能开不起来」这类问题在界面上直接可查，
+    而不必去翻服务器上的日志文件。
+    """
+
+    __tablename__ = "system_logs"
+    __table_args__ = (Index("ix_sl_level_time", "level", "ts"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    ts: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
+    # info / warning / error / critical
+    level: Mapped[str] = mapped_column(String(16), default="info", index=True)
+    # collector / port / scheduler / storage / database / network / security / system
+    category: Mapped[str] = mapped_column(String(32), default="system", index=True)
+    # 来源模块，如 gnmi_collector / netflow_collector / scheduler
+    source: Mapped[str] = mapped_column(String(64), default="", index=True)
+    # 一句话摘要
+    message: Mapped[str] = mapped_column(Text, default="")
+    # 详细错误信息（异常堆栈、原始报错等）
+    detail: Mapped[str] = mapped_column(Text, default="")
+    # 关联设备（可选）
+    device_id: Mapped[int | None] = mapped_column(
+        ForeignKey("devices.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    # 附加上下文（端口号、配置项等），JSON 字符串
+    context: Mapped[str] = mapped_column(Text, default="{}")
+
+
 class NotificationChannel(Base):
     """通知渠道：webhook / 邮件 / 企业微信 / 钉钉。"""
 

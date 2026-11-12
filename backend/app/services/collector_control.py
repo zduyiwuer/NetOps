@@ -21,6 +21,40 @@ _syslog_udp = None
 _syslog_tcp = None
 
 
+def _log_collector_failure(
+    name: str,
+    port: Any,
+    summary: str,
+    detail: str = "",
+    context: Optional[Dict[str, Any]] = None,
+) -> None:
+    """采集服务启动失败时写入系统日志。
+
+    这类问题（如端口被占用）在界面上看不到，
+    用户只能「发现功能没生效」却不知道原因——系统日志就是为此而存在。
+
+    这里直接写库而不走 logger：失败信息需要 error 级别与详细诊断，
+    而 logger 那边的自动捕获按 (source, message) 去重，
+    两者并存会把同一次失败记成两条。
+    """
+    try:
+        from app.services import system_log_service
+
+        ctx = dict(context or {})
+        if port is not None:
+            ctx.setdefault("port", port)
+        system_log_service.write_log(
+            system_log_service.LEVEL_ERROR,
+            system_log_service.CAT_PORT,
+            "collector_control",
+            f"{name} {summary}",
+            detail,
+            context=ctx,
+        )
+    except Exception:
+        pass
+
+
 async def start_gnmi(port: int = 57400) -> bool:
     """启动 gNMI Collector。"""
     global _gnmi_server
@@ -31,15 +65,29 @@ async def start_gnmi(port: int = 57400) -> bool:
 
         ok = await start_telemetry_services(gnmi_port=port)
         if not ok:
-            logger.warning("gNMI Collector 启动失败")
+            # 用 info 而非 warning：详细诊断已由 _log_collector_failure 写入系统日志，
+            # 这里再发 warning 会被自动捕获重复记一条
+            logger.info("gNMI Collector 启动失败，端口 %s", port)
             _gnmi_server = None
+            _log_collector_failure(
+                "gNMI 遥测服务", port,
+                "启动失败：监听端口无法绑定",
+                "端口可能已被其它程序占用，或落在 Windows 系统排除端口范围内"
+                "（netsh int ipv4 show excludedportrange protocol=tcp 可查）。"
+                "可在平台设置中手动指定其它端口。",
+                {"port": port, "service": "gnmi"},
+            )
             return False
         _gnmi_server = True
         logger.info("gNMI Collector 已启用，端口 %s", port)
         return True
     except Exception as exc:
-        logger.warning("gNMI Collector 启用失败: %s", exc)
+        logger.info("gNMI Collector 启用失败: %s", exc)
         _gnmi_server = None
+        _log_collector_failure(
+            "gNMI 遥测服务", port, f"启动异常：{exc}", "",
+            {"port": port, "service": "gnmi"},
+        )
         return False
 
 
@@ -75,7 +123,13 @@ async def start_netflow(ports: Optional[list] = None) -> bool:
         logger.info("NetFlow 采集器已启用，端口 %s", ports)
         return True
     except Exception as exc:
-        logger.warning("NetFlow 采集器启用失败: %s", exc)
+        logger.info("NetFlow 采集器启用失败: %s", exc)
+        _log_collector_failure(
+            "NetFlow 采集器", ", ".join(str(p) for p in (ports or [])),
+            f"启动异常：{exc}",
+            "UDP 端口可能被占用，或被 Windows 系统排除端口范围占用。",
+            {"ports": list(ports or []), "service": "netflow"},
+        )
         return False
 
 
@@ -107,7 +161,13 @@ async def start_syslog() -> bool:
         logger.info("Syslog 接收服务已启用")
         return True
     except Exception as exc:
-        logger.warning("Syslog 接收服务启用失败: %s", exc)
+        logger.info("Syslog 接收服务启用失败: %s", exc)
+        _log_collector_failure(
+            "Syslog 接收服务", None,
+            f"启动异常：{exc}",
+            "UDP 5514 / TCP 5514 可能被占用，或被系统排除端口范围占用。",
+            {"service": "syslog"},
+        )
         return False
 
 

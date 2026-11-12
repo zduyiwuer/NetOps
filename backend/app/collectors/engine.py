@@ -360,11 +360,11 @@ class Collector:
             enable_password=self.device.ssh_enable_password,
         )
 
-    async def fetch_logs(self) -> List[Tuple[str, str]]:
+    async def fetch_logs(self, limit: int = 200) -> List[Tuple[str, str]]:
         if self.mock:
             return []
         ssh = self._ssh_client()
-        return await ssh.fetch_logs()
+        return await ssh.fetch_logs(limit=limit)
 
     async def backup_config(self) -> str:
         if self.mock:

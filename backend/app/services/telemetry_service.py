@@ -299,13 +299,17 @@ def _port_bindable(port: int, host: str = "0.0.0.0") -> bool:
     可用 ``netsh int ipv4 show excludedportrange protocol=tcp`` 查看）
     会让落在其中的端口绑定时报 ``Permission denied``——
     这类端口既没有进程占用，netstat 也查不到，很容易误判成「端口空闲」。
+
+    探测时**不设 SO_REUSEADDR**：Windows 上该标志允许抢占已被占用的端口，
+    设了就会把「端口已被别的程序占用」误判成可用。
+    绑定后再 listen()，确保探测结论与真实绑定行为一致。
     """
     import socket
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         sock.bind((host, port))
+        sock.listen(1)
         return True
     except OSError:
         return False
@@ -352,16 +356,34 @@ async def start_telemetry_services(gnmi_port: int = 57400) -> bool:
     # 端口可用性预检：标准端口可能被 Windows 排除范围占用而无法绑定
     actual_port, fallback = resolve_gnmi_port(gnmi_port)
     if fallback:
+        # 只发一条日志：系统日志服务会自动捕获 warning 级日志，
+        # extra 里的结构化上下文会一并落到系统日志的 context 字段
         logger.warning(
             "gNMI 标准端口 %s 不可用（可能落在系统排除端口范围或被占用），"
             "自动改用端口 %s。设备采用 dial-out 推送时需把 target 端口改为 %s",
             gnmi_port, actual_port, actual_port,
+            extra={
+                "syslog_context": {
+                    "preferred_port": gnmi_port,
+                    "actual_port": actual_port,
+                    "reason": "标准端口被系统排除或被其它程序占用，已自动回退",
+                }
+            },
         )
 
     collector_server = TelemetryCollectorServer(on_samples, resolve_device_by_peer, mapper)
     if not await collector_server.start(actual_port):
         collector_server = None
-        logger.warning("gNMI collector 启动失败，端口 %s 可能被占用", actual_port)
+        logger.warning(
+            "gNMI collector 启动失败，端口 %s 可能被占用",
+            actual_port,
+            extra={
+                "syslog_context": {
+                    "port": actual_port,
+                    "reason": "端口绑定失败，可能被占用或落在系统排除端口范围内",
+                }
+            },
+        )
         return False
 
     # 启动 client 模式会话

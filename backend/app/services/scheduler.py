@@ -22,6 +22,7 @@ from app.models.models import (
     DeviceMetric,
     InterfaceMetric,
     InspectionTask,
+    Store,
 )
 from app.services.alerting import check_offline_devices, evaluate_rules, recover_offline_alerts
 
@@ -191,7 +192,29 @@ async def collect_device_logs(device_id: int) -> int:
         db.commit()
         return count
     except Exception as exc:
-        logger.warning("日志采集失败 device=%s: %s", device_id, exc)
+        # 带上 device_id 与门店，便于在系统日志里按门店定位问题设备
+        dev_name = ""
+        store_name = ""
+        try:
+            dev = db.get(Device, device_id)
+            if dev:
+                dev_name = dev.name
+                if dev.store_id:
+                    st = db.get(Store, dev.store_id)
+                    store_name = st.name if st else ""
+        except Exception:
+            pass
+        logger.warning(
+            "日志采集失败 device=%s: %s",
+            device_id, exc,
+            extra={
+                "syslog_context": {
+                    "device_id": device_id,
+                    "device_name": dev_name,
+                    "store_name": store_name,
+                }
+            },
+        )
         return 0
     finally:
         db.close()

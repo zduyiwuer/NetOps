@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.core.security import get_current_user, require_operator
 from app.db.session import get_db
-from app.models.models import Device, DeviceLog, Store, User
+from app.models.models import Device, DeviceLog, Store, SystemLog, User
 from app.services.scheduler import collect_device_logs
 
 router = APIRouter(prefix="/api/logs", tags=["日志"])
@@ -130,3 +130,121 @@ def cleanup_logs(
     count = db.query(DeviceLog).filter(DeviceLog.ts < cutoff).delete(synchronize_session=False)
     db.commit()
     return {"ok": True, "deleted": count}
+
+
+# ================================================================ 系统日志
+@router.get("/system")
+def list_system_logs(
+    level: Optional[str] = None,
+    category: Optional[str] = None,
+    keyword: Optional[str] = None,
+    store_id: Optional[int] = None,
+    hours: int = Query(168, ge=1, le=8760),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(100, ge=1, le=1000),
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """查询平台自身的运行日志（端口占用、采集器启动失败等系统级问题）。"""
+    q = db.query(SystemLog)
+    since = datetime.now() - timedelta(hours=hours)
+    q = q.filter(SystemLog.ts >= since)
+    if level:
+        q = q.filter(SystemLog.level == level)
+    if category:
+        q = q.filter(SystemLog.category == category)
+    if store_id:
+        # 系统日志大多与设备无关；有关联的按关联设备所属门店过滤
+        allowed = [d.id for d in db.query(Device).filter(Device.store_id == store_id).all()]
+        q = q.filter(SystemLog.device_id.in_(allowed or [-1]))
+    if keyword:
+        like = f"%{keyword.strip()}%"
+        q = q.filter(
+            (SystemLog.message.like(like))
+            | (SystemLog.detail.like(like))
+            | (SystemLog.source.like(like))
+        )
+    total = q.count()
+    rows = (
+        q.order_by(SystemLog.ts.desc(), SystemLog.id.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
+    devices = {d.id: d.name for d in db.query(Device).all()}
+    items: List[Dict[str, Any]] = []
+    for r in rows:
+        items.append(
+            {
+                "id": r.id,
+                "ts": r.ts.isoformat(),
+                "level": r.level,
+                "category": r.category,
+                "source": r.source,
+                "message": r.message,
+                "detail": r.detail,
+                "device_id": r.device_id,
+                "device_name": devices.get(r.device_id, "") if r.device_id else "",
+                "context": _safe_json(r.context),
+            }
+        )
+    return {"items": items, "total": total, "page": page, "page_size": page_size}
+
+
+@router.get("/system/statistics")
+def system_log_statistics(
+    hours: int = Query(168, ge=1, le=8760),
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """系统日志按级别 / 分类统计。"""
+    since = datetime.now() - timedelta(hours=hours)
+    by_level = dict(
+        db.query(SystemLog.level, func.count(SystemLog.id))
+        .filter(SystemLog.ts >= since)
+        .group_by(SystemLog.level)
+        .all()
+    )
+    by_category = dict(
+        db.query(SystemLog.category, func.count(SystemLog.id))
+        .filter(SystemLog.ts >= since)
+        .group_by(SystemLog.category)
+        .all()
+    )
+    total = (
+        db.query(func.count(SystemLog.id)).filter(SystemLog.ts >= since).scalar() or 0
+    )
+    return {
+        "total": total,
+        "by_level": by_level,
+        "by_category": by_category,
+        "hours": hours,
+    }
+
+
+@router.delete("/system/cleanup")
+def cleanup_system_logs(
+    days: int = Query(30, ge=1),
+    db: Session = Depends(get_db),
+    _: User = Depends(require_operator),
+) -> Dict[str, Any]:
+    """清理过期系统日志。"""
+    cutoff = datetime.now() - timedelta(days=days)
+    count = (
+        db.query(SystemLog).filter(SystemLog.ts < cutoff).delete(synchronize_session=False)
+    )
+    db.commit()
+    return {"ok": True, "deleted": count}
+
+
+def _safe_json(raw: str) -> Dict[str, Any]:
+    """解析 context JSON，失败时返回空字典。"""
+    import json
+
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+    except (TypeError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}

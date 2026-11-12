@@ -32,7 +32,7 @@ NetFlow 会话分析、gNMI 遥测、配置备份、基线巡检与自动报告�
 | 实时接口速率 | IF-MIB 64 位计数器差分、协商速率自适应、利用率计算、Down/错包标识、**按门店筛选** |
 | 资源监控 | CPU 使用率、内存使用率、设备温度、SNMP 响应时延、运行时长、历史曲线 |
 | 告警中心 | 阈值规则 + 持续时间 + 静默期 + 自动恢复；**详细告警内容（定位到具体接口）+ 门店筛选**；Webhook / 企业微信 / 钉钉 / 邮件通知 |
-| 日志中心 | 内置 Syslog UDP+TCP 接收服务（RFC3164/RFC5424）、SSH 主动拉取、级别与关键字检索 |
+| 日志中心 | **设备日志**（内置 Syslog UDP+TCP 接收服务 RFC3164/RFC5424、SSH 主动拉取）与**系统日志**（平台自身的运行问题：端口占用、采集器启动失败等），均支持按门店筛选 |
 | 资产管理 | 资产编号、序列号、固件版本、采购/保修/合同信息、保修临期提醒 |
 | 门店管理 | 按门店/网点组织设备，统计各门店在线率、资产分布 |
 | 流量分析 | 接口 / 设备 / 门店三维度 TopN 排行、流量趋势、错包 TopN |
@@ -650,6 +650,12 @@ python -m scripts.verify_startup_and_fg_mem  # 15 项：无 cmd 窗口残留、�
 
 # 21. gNMI 开关与端口回退验证（需先启动后端服务）
 python -m scripts.verify_gnmi_switch      # 17 项：端口可用性检测、端口回退、开关反复切换、状态如实反馈
+
+# 22. 系统日志与门店筛选验证（需先启动后端服务）
+python -m scripts.verify_system_log        # 15 项：系统日志标签页、门店筛选、详情弹窗、无控制台错误
+
+# 23. 端口不可用时是否写入系统日志（需先启动后端服务）
+python -m scripts.verify_port_occupied_logged  # 6 项：占用端口触发回退，校验日志级别/分类/上下文/去重
 ```
 
 > 容器内运行验证脚本时，需先启动服务并把 `BASE` 指向容器地址。
@@ -937,6 +943,61 @@ curl -X POST http://localhost:8900/api/devices/probe/batch \
 ```http
 GET /api/monitor/firewalls/sessions          # 所有防火墙的当前会话数一览
 GET /api/monitor/devices/{device_id}/sessions # 单台设备的会话数与趋势
+```
+
+---
+
+## 九之九之三、系统日志（平台自身的运行问题）
+
+日志中心分为两个标签页：
+
+| 标签页 | 记录什么 |
+| --- | --- |
+| **设备日志** | 设备侧产生的日志（Syslog 接收 / SSH 拉取） |
+| **系统日志** | **平台自身**的运行问题——某个功能为什么没起来 |
+
+### 记录哪些问题
+
+| 分类 | 典型场景 |
+| --- | --- |
+| `port` 端口 | 端口被占用、被 Windows 排除端口范围占用、绑定失败、标准端口不可用已自动回退 |
+| `collector` 采集服务 | gNMI / NetFlow / Syslog 采集器启动失败、设备日志采集失败、SSH 连接失败 |
+| `scheduler` 调度 | 调度任务执行异常 |
+| `database` / `storage` | 数据库与存储相关故障 |
+
+### 实现方式
+
+系统日志通过 `logging.Handler` **自动捕获**平台自身的 `WARNING` 及以上日志——
+业务代码里现成的 `logger.warning(...) / logger.error(...)` 会自动落库，
+不必在每个失败分支手工埋点，也不会漏记。
+
+- **只记问题**：INFO 级的流水不入库，避免噪音
+- **自动去重**：同一来源的相同消息 5 分钟内只记一条，防止「每 30 秒失败一次」刷屏
+- **只收平台自己的 logger**：第三方库（paramiko / grpc / sqlalchemy）的内部告警不入库
+- **写库失败不影响主流程**：日志记录自身出错时静默降级
+- **附带上下文**：日志调用处可用 `extra={"syslog_context": {...}}` 附加结构化信息
+  （端口号、设备 ID、门店等），会存进 `context` 字段
+
+```python
+logger.warning(
+    "gNMI 标准端口 %s 不可用，已自动回退到端口 %s",
+    preferred, actual,
+    extra={"syslog_context": {"preferred_port": preferred, "actual_port": actual}},
+)
+```
+
+### 界面
+
+- 统计卡片：总量、严重/错误、警告、**端口问题**
+- 筛选：门店 / 级别 / 分类 / 关键字 / 时间范围
+- 列表：级别、分类、来源、**关联设备**、消息、时间，可查看详情（含完整诊断与上下文）
+- 关联到设备的日志会带上 `device_id`，因此**支持按门店筛选**；
+  平台级问题（与设备无关）显示为「与具体设备无关」
+
+```http
+GET /api/logs/system                    # 查询（支持 level/category/keyword/store_id/hours）
+GET /api/logs/system/statistics         # 按级别与分类统计
+DELETE /api/logs/system/cleanup?days=30 # 清理过期日志
 ```
 
 ---

@@ -205,7 +205,9 @@ def main() -> int:
         except Exception:
             pass
         check("可点击批量探测", batch_clicked)
-        page.wait_for_timeout(5000)
+        # 批量探测要走 SSH，设备不可达时要等连接超时（实测可达 7s+），
+        # 5 秒不够，容易误判成「对话框没弹出」
+        page.wait_for_timeout(20000)
 
         dlg = page.inner_text("body")
         check("弹出探测结果对话框", "设备在线探测结果" in dlg)

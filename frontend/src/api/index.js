@@ -127,6 +127,9 @@ export const logApi = {
   statistics: (params) => http.get('/logs/statistics', { params }),
   collect: (deviceId) => http.post(`/logs/collect/${deviceId}`),
   cleanup: (days) => http.delete('/logs/cleanup', { params: { days } }),
+  systemLogs: (params) => http.get('/logs/system', { params }),
+  systemLogStatistics: (params) => http.get('/logs/system/statistics', { params }),
+  cleanupSystemLogs: (days) => http.delete('/logs/system/cleanup', { params: { days } }),
 }
 
 // ---------------------------------------------------------------- 备份
