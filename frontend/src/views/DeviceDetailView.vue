@@ -39,6 +39,23 @@
           <span v-if="ifaceStatus !== 'all'"> · 当前显示 {{ filteredInterfaces.length }}</span>
         </div>
       </div>
+      <!-- 无线控制器：AP 与客户端 -->
+      <div v-if="isWireless" class="stat-card">
+        <div class="label"><el-icon><Connection /></el-icon>无线 AP</div>
+        <div class="value" style="font-size: 20px">{{ wirelessAps.length }}</div>
+        <div class="foot">
+          已注册 {{ registeredApCount }} 个 ·
+          {{ apModels.length }} 种型号
+        </div>
+      </div>
+      <div v-if="isWireless" class="stat-card">
+        <div class="label"><el-icon><User /></el-icon>关联客户端</div>
+        <div class="value" style="font-size: 20px">{{ wirelessClients.length }}</div>
+        <div class="foot">
+          {{ clientProtocols.length }} 种协议 ·
+          {{ clientApCount }} 个 AP 有客户端
+        </div>
+      </div>
       <!-- 防火墙实时会话数 -->
       <div v-if="isFirewall" class="stat-card">
         <div class="label"><el-icon><Connection /></el-icon>{{ sessionLabel }}</div>
@@ -78,6 +95,36 @@
       <div class="chart-card" style="flex: 1; min-width: 420px">
         <div class="card-title">接口流量速率（Top 8）</div>
         <BaseChart :option="ifaceOption" height="280px" />
+      </div>
+      <!-- 接口流量趋势（可按接口过滤） -->
+      <div class="chart-card" style="flex: 1; min-width: 420px">
+        <div class="card-title">
+          <span>接口流量趋势</span>
+          <div class="iface-filter">
+            <el-select
+              v-model="trendIfIndex"
+              placeholder="自动（流量最大）"
+              clearable
+              size="small"
+              style="width: 190px"
+              @change="loadIfaceHistory"
+            >
+              <el-option
+                v-for="i in trendInterfaces"
+                :key="i.if_index"
+                :label="i.if_name || `接口 ${i.if_index}`"
+                :value="i.if_index"
+              />
+            </el-select>
+            <el-select v-model="trendHours" size="small" style="width: 100px" @change="loadIfaceHistory">
+              <el-option :value="1" label="近 1 小时" />
+              <el-option :value="6" label="近 6 小时" />
+              <el-option :value="24" label="近 24 小时" />
+              <el-option :value="72" label="近 3 天" />
+            </el-select>
+          </div>
+        </div>
+        <BaseChart :option="ifaceTrendOption" height="280px" />
       </div>
       <!-- 防火墙会话趋势 -->
       <div v-if="isFirewall" class="chart-card" style="flex: 1; min-width: 420px">
@@ -165,6 +212,107 @@
         </el-descriptions>
       </div>
     </div>
+
+    <!-- 无线数据：AP 与客户端 -->
+    <template v-if="isWireless">
+      <div class="table-card" style="margin-top: 12px">
+        <div class="card-title">
+          <span>无线 AP</span>
+          <div class="iface-filter">
+            <el-input
+              v-model="apKeyword"
+              placeholder="搜索 AP 名称 / 型号 / IP"
+              clearable
+              size="small"
+              style="width: 200px"
+              :prefix-icon="Search"
+              @keyup.enter="loadWireless"
+            />
+            <el-button size="small" @click="loadWireless">查询</el-button>
+          </div>
+        </div>
+        <el-table
+          v-loading="wirelessLoading"
+          :data="wirelessAps"
+          size="small"
+          stripe
+          max-height="420"
+          empty-text="暂无 AP 数据（需通过 SSH 采集）"
+        >
+          <el-table-column prop="name" label="AP 名称" min-width="140" show-overflow-tooltip />
+          <el-table-column prop="model" label="型号" width="110" show-overflow-tooltip />
+          <el-table-column prop="slots" label="Slots" width="70" align="center" />
+          <el-table-column prop="ip" label="IP 地址" width="140" class-name="mono" show-overflow-tooltip />
+          <el-table-column prop="eth_mac" label="以太网 MAC" width="140" class-name="mono" show-overflow-tooltip />
+          <el-table-column prop="radio_mac" label="Radio MAC" width="140" class-name="mono" show-overflow-tooltip />
+          <el-table-column prop="location" label="位置" min-width="120" show-overflow-tooltip />
+          <el-table-column prop="country" label="国家" width="70" align="center" />
+          <el-table-column label="状态" width="110" align="center">
+            <template #default="{ row }">
+              <el-tag size="small" effect="plain" :type="apStateType(row.state)">
+                {{ row.state }}
+              </el-tag>
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
+
+      <div class="table-card" style="margin-top: 12px">
+        <div class="card-title">
+          <span>无线客户端</span>
+          <div class="iface-filter">
+            <el-select
+              v-model="clientApFilter"
+              placeholder="全部 AP"
+              clearable
+              size="small"
+              style="width: 170px"
+              @change="loadWireless"
+            >
+              <el-option
+                v-for="a in wirelessAps"
+                :key="a.name"
+                :label="a.name"
+                :value="a.name"
+              />
+            </el-select>
+            <el-input
+              v-model="clientKeyword"
+              placeholder="搜索 MAC / AP"
+              clearable
+              size="small"
+              style="width: 180px"
+              :prefix-icon="Search"
+              @keyup.enter="loadWireless"
+            />
+            <el-button size="small" @click="loadWireless">查询</el-button>
+          </div>
+        </div>
+        <el-table
+          v-loading="wirelessLoading"
+          :data="wirelessClients"
+          size="small"
+          stripe
+          max-height="420"
+          empty-text="暂无客户端数据（需通过 SSH 采集）"
+        >
+          <el-table-column prop="mac" label="MAC 地址" width="150" class-name="mono" show-overflow-tooltip />
+          <el-table-column prop="ap_name" label="所属 AP" min-width="140" show-overflow-tooltip />
+          <el-table-column prop="type" label="类型" width="90" align="center" />
+          <el-table-column prop="type_id" label="类型 ID" width="80" align="center" />
+          <el-table-column prop="protocol" label="协议" width="100" align="center" />
+          <el-table-column prop="state" label="状态" width="90" align="center">
+            <template #default="{ row }">
+              <el-tag size="small" effect="plain" :type="row.state === 'Run' ? 'success' : 'info'">
+                {{ row.state }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column prop="method" label="认证方式" width="110" align="center" show-overflow-tooltip />
+          <el-table-column prop="role" label="角色" width="100" align="center" show-overflow-tooltip />
+        </el-table>
+      </div>
+    </template>
   </div>
 </template>
 
@@ -172,7 +320,7 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Back, Connection, Cpu, FolderOpened, Refresh, Search } from '@element-plus/icons-vue'
+import { Back, Connection, Cpu, FolderOpened, Refresh, Search, User } from '@element-plus/icons-vue'
 import BaseChart from '../components/BaseChart.vue'
 import { backupApi, deviceApi, monitorApi } from '../api'
 import { useUserStore } from '../store/user'
@@ -270,9 +418,11 @@ async function loadMetrics() {
 }
 
 async function loadAll() {
-  // 先加载设备信息——会话数据依赖 device.vendor 判断是否为防火墙
+  // 先加载设备信息——会话/无线数据依赖 device.vendor 判断设备类型
   await loadDevice()
-  await Promise.all([loadInterfaces(), loadMetrics()])
+  await Promise.all([loadInterfaces(), loadMetrics(), loadWireless()])
+  // 接口列表就绪后再取趋势（要按流量挑接口）
+  await loadIfaceHistory()
 }
 
 async function collect() {
@@ -345,6 +495,136 @@ async function loadSessions() {
     sessions.value = res || { current: null, latest: {}, items: [] }
   } catch (e) {
     sessions.value = { current: null, latest: {}, items: [] }
+  }
+}
+
+// ---------------------------------------------------------------- 接口流量趋势
+const trendIfIndex = ref(null)
+const trendHours = ref(6)
+const ifaceHistory = ref([])
+
+// 只列出有流量数据的接口（有速率或曾有历史），避免下拉里全是闲置口
+const trendInterfaces = computed(() =>
+  interfaces.value.filter((i) => i.in_bps > 0 || i.out_bps > 0 || i.oper_status === 1),
+)
+
+async function loadIfaceHistory() {
+  if (!deviceId.value) return
+  // 未指定接口时后端返回全部接口的历史——按接口分组后选流量最大的那条画曲线
+  if (trendIfIndex.value == null) {
+    const top = trendInterfaces.value
+      .slice()
+      .sort((a, b) => (b.in_bps + b.out_bps) - (a.in_bps + a.out_bps))[0]
+    if (top) trendIfIndex.value = top.if_index
+  }
+  if (trendIfIndex.value == null) {
+    ifaceHistory.value = []
+    return
+  }
+  try {
+    const res = await monitorApi.interfaceHistory(
+      deviceId.value, trendIfIndex.value, trendHours.value,
+    )
+    ifaceHistory.value = res?.items || []
+  } catch (e) {
+    ifaceHistory.value = []
+  }
+}
+
+const ifaceTrendOption = computed(() => {
+  const rows = ifaceHistory.value
+  const times = rows.map((r) => (r.ts || '').replace('T', ' ').slice(5, 16))
+  const inM = rows.map((r) => Math.round(((r.in_bps || 0) / 1000000) * 100) / 100)
+  const outM = rows.map((r) => Math.round(((r.out_bps || 0) / 1000000) * 100) / 100)
+  return {
+    tooltip: { trigger: 'axis' },
+    legend: { data: ['入向', '出向'], right: 0, textStyle: { color: '#6b7280', fontSize: 11 } },
+    grid: { left: 52, right: 20, top: 32, bottom: 28 },
+    xAxis: {
+      type: 'category',
+      data: times,
+      axisLabel: { color: '#6b7280', fontSize: 11 },
+      axisLine: { lineStyle: { color: '#e5e7eb' } },
+    },
+    yAxis: {
+      type: 'value',
+      name: 'Mbps',
+      axisLabel: { color: '#6b7280', fontSize: 11 },
+      splitLine: { lineStyle: { color: '#eef1f5' } },
+    },
+    series: [
+      {
+        name: '入向',
+        type: 'line',
+        smooth: true,
+        showSymbol: false,
+        itemStyle: { color: '#10b981' },
+        areaStyle: { color: 'rgba(16,185,129,0.08)' },
+        data: inM,
+      },
+      {
+        name: '出向',
+        type: 'line',
+        smooth: true,
+        showSymbol: false,
+        itemStyle: { color: '#3b82f6' },
+        areaStyle: { color: 'rgba(59,130,246,0.08)' },
+        data: outM,
+      },
+    ],
+  }
+})
+
+// ---------------------------------------------------------------- 无线数据
+const wirelessAps = ref([])
+const wirelessClients = ref([])
+const wirelessLoading = ref(false)
+const apKeyword = ref('')
+const clientKeyword = ref('')
+const clientApFilter = ref('')
+
+const WIRELESS_VENDORS = ['cisco_wlc', 'aruba', 'h3c_wlc']
+const isWireless = computed(() => WIRELESS_VENDORS.includes(device.value?.vendor))
+
+const registeredApCount = computed(
+  () => wirelessAps.value.filter((a) => /registered/i.test(a.state || '')).length,
+)
+const apModels = computed(
+  () => [...new Set(wirelessAps.value.map((a) => a.model).filter(Boolean))],
+)
+const clientProtocols = computed(
+  () => [...new Set(wirelessClients.value.map((c) => c.protocol).filter(Boolean))],
+)
+const clientApCount = computed(
+  () => new Set(wirelessClients.value.map((c) => c.ap_name).filter(Boolean)).size,
+)
+
+function apStateType(state) {
+  const s = (state || '').toLowerCase()
+  if (s.includes('registered') && !s.includes('not')) return 'success'
+  if (s.includes('not')) return 'danger'
+  if (s.includes('registered')) return 'warning'
+  return 'info'
+}
+
+async function loadWireless() {
+  if (!isWireless.value) return
+  wirelessLoading.value = true
+  try {
+    const [apRes, cliRes] = await Promise.all([
+      deviceApi.wirelessAps(deviceId.value, { keyword: apKeyword.value || undefined }),
+      deviceApi.wirelessClients(deviceId.value, {
+        keyword: clientKeyword.value || undefined,
+        ap_name: clientApFilter.value || undefined,
+      }),
+    ])
+    wirelessAps.value = apRes?.items || []
+    wirelessClients.value = cliRes?.items || []
+  } catch (e) {
+    wirelessAps.value = []
+    wirelessClients.value = []
+  } finally {
+    wirelessLoading.value = false
   }
 }
 

@@ -440,27 +440,31 @@ def firewall_sessions_overview(
 @router.get("/devices/{device_id}/interfaces/history")
 def interface_history(
     device_id: int,
-    if_index: int,
+    if_index: Optional[int] = Query(
+        None, description="接口索引；留空则返回该设备所有接口的历史"
+    ),
     hours: int = Query(6, ge=1, le=168),
     db: Session = Depends(get_db),
     _: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
-    """单个接口速率历史曲线。"""
+    """接口速率历史曲线。
+
+    指定 if_index 返回单个接口；留空则返回该设备所有接口的历史，
+    便于前端在未选中某个接口时也能展示曲线。
+    """
     since = datetime.now() - timedelta(hours=hours)
-    rows = (
-        db.query(InterfaceMetric)
-        .filter(
-            InterfaceMetric.device_id == device_id,
-            InterfaceMetric.if_index == if_index,
-            InterfaceMetric.ts >= since,
-        )
-        .order_by(InterfaceMetric.ts)
-        .all()
+    q = db.query(InterfaceMetric).filter(
+        InterfaceMetric.device_id == device_id,
+        InterfaceMetric.ts >= since,
     )
+    if if_index is not None:
+        q = q.filter(InterfaceMetric.if_index == if_index)
+    rows = q.order_by(InterfaceMetric.ts).all()
     return {
         "items": [
             {
                 "ts": r.ts.isoformat(),
+                "if_index": r.if_index,
                 "in_bps": r.in_bps,
                 "out_bps": r.out_bps,
                 "utilization": r.utilization,

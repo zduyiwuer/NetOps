@@ -2,10 +2,16 @@
   <div class="page">
     <div class="page-header">
       <h2 class="page-title">
-        Telemetry 遥测
-        <span class="sub">gNMI 流式遥测订阅与样本</span>
+        gNMI 遥测采样
+        <span class="sub">设备主动推送 / 平台订阅采集的流式指标</span>
       </h2>
       <div class="toolbar">
+        <el-tooltip
+          placement="bottom-end"
+          content="数据来源：设备用 gNMI dial-out 主动推送到平台，或平台按订阅配置主动拉取。样本归一化为平台指标后落库，可在「样本趋势」里看曲线、「遥测样本」里看原始值。订阅路径在下方「可订阅路径」里配置。"
+        >
+          <el-button :icon="QuestionFilled">数据从哪来？</el-button>
+        </el-tooltip>
         <el-button :icon="Refresh" @click="reload">刷新</el-button>
         <el-button v-if="userStore.canOperate" type="primary" :icon="Plus" @click="openConfig()">
           新增订阅
@@ -195,12 +201,31 @@
         </el-table>
       </div>
 
+      <div class="chart-card" style="flex: 1; min-width: 420px">
+        <div class="card-title">
+          <span>样本趋势</span>
+          <div class="iface-filter">
+            <el-select
+              v-model="sampleMetric"
+              placeholder="全部指标"
+              clearable
+              size="small"
+              style="width: 160px"
+              @change="loadSamples"
+            >
+              <el-option v-for="m in metricOptions" :key="m" :label="m" :value="m" />
+            </el-select>
+          </div>
+        </div>
+        <BaseChart :option="sampleOption" height="300px" />
+      </div>
+
       <div class="table-card" style="flex: 1; min-width: 420px">
         <div class="card-title">
           <span>遥测样本</span>
-          <el-select v-model="sampleMetric" placeholder="全部指标" clearable style="width: 150px" @change="loadSamples">
-            <el-option v-for="m in metricOptions" :key="m" :label="m" :value="m" />
-          </el-select>
+          <span class="text-muted" style="font-size: 12px">
+            最新 {{ samples.length }} 条原始采样
+          </span>
         </div>
         <el-table :data="samples" size="small" stripe max-height="360">
           <el-table-column prop="ts" label="时间" width="150">
@@ -318,7 +343,8 @@
 <script setup>
 import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Connection, DataLine, List, Monitor, Plus, Refresh, Search } from '@element-plus/icons-vue'
+import { Connection, DataLine, List, Monitor, Plus, QuestionFilled, Refresh, Search } from '@element-plus/icons-vue'
+import BaseChart from '../components/BaseChart.vue'
 import DeviceSelect from '../components/DeviceSelect.vue'
 import { telemetryApi } from '../api'
 import { useUserStore } from '../store/user'
@@ -424,7 +450,7 @@ async function loadPaths() {
 async function loadSamples() {
   try {
     const res = await telemetryApi.samples({
-      limit: 100,
+      limit: 200,
       metric: sampleMetric.value || undefined,
     })
     samples.value = res.items || []
@@ -432,6 +458,47 @@ async function loadSamples() {
     samples.value = []
   }
 }
+
+// 样本趋势：按指标分组画曲线（一个指标一条线）
+const sampleOption = computed(() => {
+  const rows = samples.value || []
+  // 时间轴取所有样本的时间并去重排序
+  const times = [...new Set(rows.map((r) => r.ts))].sort()
+  const byMetric = new Map()
+  for (const r of rows) {
+    if (!byMetric.has(r.metric)) byMetric.set(r.metric, new Map())
+    byMetric.get(r.metric).set(r.ts, r.value_num)
+  }
+  const palette = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4']
+  const series = [...byMetric.entries()].slice(0, 8).map(([metric, map], i) => ({
+    name: metric,
+    type: 'line',
+    smooth: true,
+    showSymbol: false,
+    itemStyle: { color: palette[i % palette.length] },
+    data: times.map((t) => {
+      const v = map.get(t)
+      return v === null || v === undefined ? null : v
+    }),
+  }))
+  return {
+    tooltip: { trigger: 'axis' },
+    legend: { data: series.map((s) => s.name), right: 0, textStyle: { color: '#6b7280', fontSize: 11 } },
+    grid: { left: 56, right: 20, top: 32, bottom: 28 },
+    xAxis: {
+      type: 'category',
+      data: times.map((t) => (t || '').replace('T', ' ').slice(5, 16)),
+      axisLabel: { color: '#6b7280', fontSize: 11 },
+      axisLine: { lineStyle: { color: '#e5e7eb' } },
+    },
+    yAxis: {
+      type: 'value',
+      axisLabel: { color: '#6b7280', fontSize: 11 },
+      splitLine: { lineStyle: { color: '#eef1f5' } },
+    },
+    series,
+  }
+})
 
 async function reload() {
   await Promise.all([loadStatus(), loadConfigs(), loadPaths(), loadSamples()])

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import re
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.collectors.vendors import VendorProfile, resolve_vendor
 
@@ -195,6 +195,34 @@ class SshClient:
                     break
         return out
 
+    async def fetch_wireless_aps(self) -> List[Dict[str, Any]]:
+        """采集无线 AP 列表（`show ap summary`）。"""
+        for cmd in self.vendor.wireless_ap_cmds:
+            try:
+                text = await self._run(cmd)
+            except Exception:
+                continue
+            if not text or text.startswith("[ERROR]"):
+                continue
+            aps = parse_ap_summary(text)
+            if aps:
+                return aps
+        return []
+
+    async def fetch_wireless_clients(self) -> List[Dict[str, Any]]:
+        """采集无线客户端列表（`show wireless client summary`）。"""
+        for cmd in self.vendor.wireless_client_cmds:
+            try:
+                text = await self._run(cmd)
+            except Exception:
+                continue
+            if not text or text.startswith("[ERROR]"):
+                continue
+            clients = parse_client_summary(text)
+            if clients:
+                return clients
+        return []
+
 
 # ---------------------------------------------------------------- 文本解析
 _SYSLOG_LEVELS = {
@@ -368,4 +396,140 @@ def parse_memory_usage(text: str, vendor: str) -> Tuple[Optional[float], Optiona
             total_mb = value * factor
         except ValueError:
             pass
+
+    # ---- IOS XE / IOS 的「show memory statistics」表格 ----
+    # Processor  7F4BF212B048   1743683116   435935448   1307747668 ...
+    #   字段：池名  区域标识  总量  已用  空闲  最低  最高（单位字节）
+    # 这类设备（思科 WLC / 交换机）的 SNMP 内存字段不可信，
+    # 只有 CLI 这张表是准的。
+    if total_mb is None or pct is None:
+        for line in text.splitlines():
+            stripped = line.strip()
+            if not stripped.lower().startswith("processor"):
+                continue
+            # 区域标识是十六进制（如 7F4BF212B048），会被 \d+ 拆成
+            # 7 / 4 / 212 / 048 这些碎片——只保留位数够长的数字，
+            # 真正的字节值都是 5 位以上。
+            nums = [int(x) for x in re.findall(r"\d+", stripped) if len(x) >= 5]
+            if len(nums) < 2:
+                continue
+            total_b, used_b = float(nums[0]), float(nums[1])
+            if total_b <= 0 or used_b > total_b:
+                continue
+            total_mb = round(total_b / 1024 / 1024, 2)
+            pct = round(used_b / total_b * 100, 2)
+            break
+
     return pct, total_mb
+
+
+# ---------------------------------------------------------------- 无线数据解析
+# MAC 地址的通用写法：xx:xx:xx:xx:xx:xx 或 xxxx.xxxx.xxxx
+_MAC_RE = r"[0-9a-fA-F]{2}(?:[:\-][0-9a-fA-F]{2}){5}|[0-9a-fA-F]{4}(?:\.[0-9a-fA-F]{4}){2}"
+
+# `show ap summary` 的行格式（IOS XE / AireOS 通用）：
+#   AP Name  Slots  AP Model  Ethernet MAC  Radio MAC  Location  Country  IP  State
+# Location 里可能带空格（"default location"），所以不能按固定列切，
+# 改用正则逐个提取锚定字段。
+_AP_LINE = re.compile(
+    r"^(?P<name>\S+)\s+"
+    r"(?P<slots>\d+)\s+"
+    r"(?P<model>\S+)\s+"
+    rf"(?P<eth_mac>{_MAC_RE})\s+"
+    rf"(?P<radio_mac>{_MAC_RE})\s+"
+    r"(?P<location>.*?)\s+"
+    r"(?P<country>[A-Z]{2})\s+"
+    r"(?P<ip>\d{1,3}(?:\.\d{1,3}){3})\s+"
+    r"(?P<state>[A-Za-z][\w ()/-]*?)\s*$"
+)
+
+# `show wireless client summary` 的行格式：
+#   MAC  AP Name  Type  TypeID  State  Protocol  Method  Role
+_CLIENT_LINE = re.compile(
+    rf"^(?P<mac>{_MAC_RE})\s+"
+    r"(?P<ap_name>\S+)\s+"
+    r"(?P<type>[A-Za-z0-9.]+)\s+"
+    r"(?P<type_id>\d+)\s+"
+    r"(?P<state>[A-Za-z][\w ()/-]*?)\s+"
+    r"(?P<protocol>\S+)\s+"
+    r"(?P<method>\S+)\s+"
+    r"(?P<role>\S+)\s*$"
+)
+
+
+def _is_separator(line: str) -> bool:
+    """判断是否是表格的分隔线（全是 - 或空白）。"""
+    s = line.strip()
+    return not s or set(s) <= {"-", " "}
+
+
+def parse_ap_summary(text: str) -> List[Dict[str, Any]]:
+    """解析 `show ap summary` 的输出，返回 AP 列表。"""
+    if not text:
+        return []
+    aps: List[Dict[str, Any]] = []
+    seen = set()
+    for line in text.splitlines():
+        stripped = line.strip()
+        if _is_separator(stripped):
+            continue
+        if stripped.lower().startswith("number of ap"):
+            continue
+        if stripped.lower().startswith("ap name"):  # 表头
+            continue
+        m = _AP_LINE.match(stripped)
+        if not m:
+            continue
+        d = m.groupdict()
+        if d["name"] in seen:
+            continue
+        seen.add(d["name"])
+        aps.append(
+            {
+                "name": d["name"],
+                "model": d["model"],
+                "slots": int(d["slots"]),
+                "eth_mac": d["eth_mac"],
+                "radio_mac": d["radio_mac"],
+                "location": d["location"].strip(),
+                "country": d["country"],
+                "ip": d["ip"],
+                "state": d["state"].strip(),
+            }
+        )
+    return aps
+
+
+def parse_client_summary(text: str) -> List[Dict[str, Any]]:
+    """解析 `show wireless client summary` 的输出，返回客户端列表。"""
+    if not text:
+        return []
+    clients: List[Dict[str, Any]] = []
+    seen = set()
+    for line in text.splitlines():
+        stripped = line.strip()
+        if _is_separator(stripped):
+            continue
+        low = stripped.lower()
+        if low.startswith("number of client") or low.startswith("mac address"):
+            continue
+        m = _CLIENT_LINE.match(stripped)
+        if not m:
+            continue
+        d = m.groupdict()
+        if d["mac"] in seen:
+            continue
+        seen.add(d["mac"])
+        clients.append(
+            {
+                "mac": d["mac"],
+                "ap_name": d["ap_name"],
+                "type": d["type"],
+                "type_id": int(d["type_id"]),
+                "state": d["state"].strip(),
+                "protocol": d["protocol"],
+                "method": d["method"],
+                "role": d["role"],
+            }
+        )
+    return clients

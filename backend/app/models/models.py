@@ -425,6 +425,54 @@ class MibNode(Base):
     description: Mapped[str] = mapped_column(Text, default="")
 
 
+class WirelessAP(Base):
+    """无线控制器下挂的 AP（Access Point）。
+
+    通过 SSH `show ap summary` 采集——SNMP 侧没有 AP 列表的标量，
+    只有一堆以 MAC 为索引的表实例。
+    """
+
+    __tablename__ = "wireless_aps"
+    __table_args__ = (Index("ix_wap_dev", "device_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    device_id: Mapped[int] = mapped_column(
+        ForeignKey("devices.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(120), default="")
+    model: Mapped[str] = mapped_column(String(80), default="")
+    slots: Mapped[int] = mapped_column(Integer, default=0)
+    eth_mac: Mapped[str] = mapped_column(String(32), default="")
+    radio_mac: Mapped[str] = mapped_column(String(32), default="")
+    location: Mapped[str] = mapped_column(String(160), default="")
+    country: Mapped[str] = mapped_column(String(16), default="")
+    ip: Mapped[str] = mapped_column(String(64), default="")
+    state: Mapped[str] = mapped_column(String(48), default="")
+    ts: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
+
+
+class WirelessClient(Base):
+    """无线控制器下的关联客户端。"""
+
+    __tablename__ = "wireless_clients"
+    __table_args__ = (Index("ix_wc_dev", "device_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    device_id: Mapped[int] = mapped_column(
+        ForeignKey("devices.id", ondelete="CASCADE"), index=True
+    )
+    mac: Mapped[str] = mapped_column(String(32), default="")
+    ap_name: Mapped[str] = mapped_column(String(120), default="")
+    # WLAN / 802.11a / 802.11b 等
+    type: Mapped[str] = mapped_column(String(32), default="")
+    type_id: Mapped[int] = mapped_column(Integer, default=0)
+    state: Mapped[str] = mapped_column(String(48), default="")
+    protocol: Mapped[str] = mapped_column(String(48), default="")
+    method: Mapped[str] = mapped_column(String(48), default="")
+    role: Mapped[str] = mapped_column(String(48), default="")
+    ts: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
+
+
 class NotificationChannel(Base):
     """通知渠道：webhook / 邮件 / 企业微信 / 钉钉。"""
 

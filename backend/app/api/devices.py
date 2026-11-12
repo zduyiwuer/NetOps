@@ -15,7 +15,17 @@ from app.core.crypto import MASK, mask_secret
 from app.core.security import require_admin, require_operator
 from app.core.security import get_current_user
 from app.db.session import get_db
-from app.models.models import AlertEvent, ConfigBackup, Device, DeviceLog, DeviceMetric, Store, User
+from app.models.models import (
+    AlertEvent,
+    ConfigBackup,
+    Device,
+    DeviceLog,
+    DeviceMetric,
+    Store,
+    User,
+    WirelessAP,
+    WirelessClient,
+)
 from app.services import importer
 from app.services.scheduler import collect_device
 
@@ -601,3 +611,87 @@ def export_devices_xlsx(
 @router.get("/vendors")
 def list_vendors(_: User = Depends(get_current_user)) -> Dict[str, Any]:
     return {"items": vendor_options()}
+
+
+# ---------------------------------------------------------------- 无线数据
+@router.get("/devices/{device_id}/wireless/aps")
+def list_wireless_aps(
+    device_id: int,
+    keyword: str = Query("", description="按名称 / 型号 / IP 搜索"),
+    state: str = Query("", description="按状态过滤"),
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """无线控制器下挂的 AP 列表。"""
+    device = db.get(Device, device_id)
+    if device is None:
+        raise HTTPException(status_code=404, detail="设备不存在")
+    q = db.query(WirelessAP).filter(WirelessAP.device_id == device_id)
+    if keyword:
+        like = f"%{keyword.strip()}%"
+        q = q.filter(
+            (WirelessAP.name.like(like))
+            | (WirelessAP.model.like(like))
+            | (WirelessAP.ip.like(like))
+        )
+    if state:
+        q = q.filter(WirelessAP.state == state)
+    rows = q.order_by(WirelessAP.name).all()
+    return {
+        "items": [
+            {
+                "name": r.name,
+                "model": r.model,
+                "slots": r.slots,
+                "eth_mac": r.eth_mac,
+                "radio_mac": r.radio_mac,
+                "location": r.location,
+                "country": r.country,
+                "ip": r.ip,
+                "state": r.state,
+                "ts": r.ts.isoformat() if r.ts else "",
+            }
+            for r in rows
+        ],
+        "total": len(rows),
+    }
+
+
+@router.get("/devices/{device_id}/wireless/clients")
+def list_wireless_clients(
+    device_id: int,
+    keyword: str = Query("", description="按 MAC / AP 名搜索"),
+    ap_name: str = Query("", description="按 AP 过滤"),
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """无线控制器下的关联客户端列表。"""
+    device = db.get(Device, device_id)
+    if device is None:
+        raise HTTPException(status_code=404, detail="设备不存在")
+    q = db.query(WirelessClient).filter(WirelessClient.device_id == device_id)
+    if keyword:
+        like = f"%{keyword.strip()}%"
+        q = q.filter(
+            (WirelessClient.mac.like(like)) | (WirelessClient.ap_name.like(like))
+        )
+    if ap_name:
+        q = q.filter(WirelessClient.ap_name == ap_name)
+    rows = q.order_by(WirelessClient.ap_name, WirelessClient.mac).all()
+    return {
+        "items": [
+            {
+                "mac": r.mac,
+                "ap_name": r.ap_name,
+                "type": r.type,
+                "type_id": r.type_id,
+                "state": r.state,
+                "protocol": r.protocol,
+                "method": r.method,
+                "role": r.role,
+                "ts": r.ts.isoformat() if r.ts else "",
+            }
+            for r in rows
+        ],
+        "total": len(rows),
+    }

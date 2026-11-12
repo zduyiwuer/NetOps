@@ -9,6 +9,9 @@
         <el-select v-model="storeId" placeholder="全部门店" clearable style="width: 150px" @change="load">
           <el-option v-for="s in stores" :key="s.id" :label="s.name" :value="s.id" />
         </el-select>
+        <el-tag v-if="currentStoreName" type="primary" effect="plain" size="default">
+          当前筛选：{{ currentStoreName }}
+        </el-tag>
         <el-button :icon="Refresh" @click="load">刷新</el-button>
         <el-button :icon="Setting" @click="configVisible = true">自定义</el-button>
       </div>
@@ -257,8 +260,12 @@ async function loadTraffic() {
   }
 }
 
-const storeRows = computed(() => {
-  const data = overview.value.by_store || {}
+// 当前选中的门店名——用于在页面上明确显示筛选状态
+const currentStoreName = computed(
+  () => stores.value.find((s) => s.id === storeId.value)?.name || '',
+)
+
+const storeRows = computed(() => {  const data = overview.value.by_store || {}
   const total = Object.values(data).reduce((a, b) => a + b, 0) || 1
   return Object.entries(data)
     .map(([name, count]) => ({ name, count, percent: Math.round((count / total) * 100) }))

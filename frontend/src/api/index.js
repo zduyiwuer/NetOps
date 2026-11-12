@@ -84,6 +84,8 @@ export const deviceApi = {
   },
   exportCsv: (params) => http.get('/export/devices.csv', { params, responseType: 'blob' }),
   exportXlsx: (params) => http.get('/export/devices.xlsx', { params, responseType: 'blob' }),
+  wirelessAps: (id, params) => http.get(`/devices/${id}/wireless/aps`, { params }),
+  wirelessClients: (id, params) => http.get(`/devices/${id}/wireless/clients`, { params }),
 }
 
 // ---------------------------------------------------------------- 监控

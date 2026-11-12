@@ -6,6 +6,9 @@
         <el-select v-model="storeId" placeholder="全部门店" clearable style="width: 150px" @change="onStoreChange">
           <el-option v-for="s in stores" :key="s.id" :label="s.name" :value="s.id" />
         </el-select>
+        <el-tag v-if="currentStoreName" type="primary" effect="plain" size="default">
+          当前筛选：{{ currentStoreName }}
+        </el-tag>
         <el-select v-model="sortBy" style="width: 140px" @change="load">
           <el-option label="按利用率排序" value="utilization" />
           <el-option label="按入向排序" value="in_bps" />
@@ -129,6 +132,10 @@ import { deviceApi, monitorApi } from '../api'
 const items = ref([])
 const stores = ref([])
 const storeId = ref(null)
+// 当前选中的门店名——用于在页面上明确显示筛选状态
+const currentStoreName = computed(
+  () => stores.value.find((s) => s.id === storeId.value)?.name || '',
+)
 const deviceId = ref(null)
 const sortBy = ref('utilization')
 const onlyActive = ref(false)

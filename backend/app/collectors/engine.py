@@ -84,6 +84,9 @@ class DeviceSample:
     interfaces: List[InterfaceSample] = field(default_factory=list)
     collected_at: datetime = field(default_factory=datetime.now)
     raw_syslog: List[Tuple[str, str]] = field(default_factory=list)
+    # 无线控制器专属：AP 与客户端明细
+    wireless_aps: List[Dict[str, Any]] = field(default_factory=list)
+    wireless_clients: List[Dict[str, Any]] = field(default_factory=list)
 
 
 class RateTracker:
@@ -188,6 +191,11 @@ class Collector:
             sample.system.temperature = _pick(values, self.vendor.temperature_oids)
             mem_total = _pick(values, self.vendor.mem_total_oids)
             mem_used = _pick(values, self.vendor.mem_used_oids)
+            # 部分 MIB 返回的是字节，统一换算成 MB
+            if mem_total is not None and self.vendor.mem_total_bytes:
+                mem_total = round(mem_total / 1024 / 1024, 2)
+            if mem_used is not None and self.vendor.mem_used_bytes:
+                mem_used = round(mem_used / 1024 / 1024, 2)
             if mem_total is not None and mem_used is not None:
                 sample.system.mem_total_mb = mem_total
                 sample.system.mem_used_mb = mem_used
@@ -202,6 +210,19 @@ class Collector:
                     sample.system.mem_usage = None
             elif mem_used is not None:
                 sample.system.mem_used_mb = mem_used
+
+            # 3.1) 设备直接给出内存百分比时优先用它——
+            #     有些设备（思科 ASA / WLC 实测）ciscoSysMonExtMemoryUsed
+            #     返回的值比总内存还大（设备侧历史缺陷），
+            #     只有 MemoryUtilization 是准的
+            if self.vendor.mem_pct_oids:
+                pct = _pick(values, self.vendor.mem_pct_oids)
+                if pct is not None and 0 <= pct <= 100:
+                    sample.system.mem_usage = round(pct, 2)
+                    if sample.system.mem_total_mb:
+                        sample.system.mem_used_mb = round(
+                            sample.system.mem_total_mb * pct / 100, 2
+                        )
 
             # 3) 带索引的表型指标：GET 取不到时改用 WALK
             #    例：Catalyst 2960 的 cpmCPUTotal5minRev 在 .1.5.11、
@@ -264,8 +285,62 @@ class Collector:
                 except Exception as exc:
                     self._log_ssh_failure("厂商特有指标补采", exc)
 
+        # 5) 无线数据：AP 列表与客户端列表（仅无线控制器）
+        if collect_system and (
+            self.vendor.wireless_ap_cmds or self.vendor.wireless_client_cmds
+        ):
+            if self.device.ssh_username and self.device.ssh_password:
+                try:
+                    await self._collect_wireless(sample)
+                except Exception as exc:
+                    self._log_ssh_failure("无线数据采集", exc)
+
         sample.system.reachable = True
         return sample
+
+    async def _collect_wireless(self, sample: DeviceSample) -> None:
+        """采集并落库无线 AP 与客户端明细。"""
+        ssh = self._ssh_client()
+        aps = await ssh.fetch_wireless_aps()
+        clients = await ssh.fetch_wireless_clients()
+        if not aps and not clients:
+            return
+        sample.wireless_aps = aps
+        sample.wireless_clients = clients
+        self._save_wireless(aps, clients)
+
+    def _save_wireless(
+        self,
+        aps: List[Dict[str, Any]],
+        clients: List[Dict[str, Any]],
+    ) -> None:
+        """把无线明细写入数据库（整体替换，保留最新快照）。"""
+        try:
+            from app.db.session import SessionLocal
+            from app.models.models import WirelessAP, WirelessClient
+
+            now = datetime.now()
+            db = SessionLocal()
+            try:
+                db.query(WirelessAP).filter(
+                    WirelessAP.device_id == self.device.id
+                ).delete(synchronize_session=False)
+                db.query(WirelessClient).filter(
+                    WirelessClient.device_id == self.device.id
+                ).delete(synchronize_session=False)
+                for a in aps:
+                    db.add(WirelessAP(device_id=self.device.id, ts=now, **a))
+                for c in clients:
+                    db.add(WirelessClient(device_id=self.device.id, ts=now, **c))
+                db.commit()
+            finally:
+                db.close()
+            logger.info(
+                "设备 %s 的无线数据已更新：%d 个 AP / %d 个客户端",
+                self.device.name, len(aps), len(clients),
+            )
+        except Exception as exc:
+            logger.debug("保存无线数据失败: %s", exc)
 
     async def _collect_interfaces(self, client: SnmpClient) -> List[InterfaceSample]:
         """采集接口表。

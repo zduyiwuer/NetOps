@@ -70,6 +70,15 @@ class VendorProfile:
     cpu_oids: List[str] = field(default_factory=list)
     mem_total_oids: List[str] = field(default_factory=list)
     mem_used_oids: List[str] = field(default_factory=list)
+    # 直接返回「内存使用百分比」的 OID（值域 0-100）。
+    # 有些设备（思科 ASA / WLC 实测）虽然能给出总内存，
+    # 但 ciscoSysMonExtMemoryUsed 返回的值大于总量（设备侧的历史缺陷），
+    # 只有 ciscoSysMonExtMemoryUtilization 是准的——这类设备用这里的 OID。
+    mem_pct_oids: List[str] = field(default_factory=list)
+    # 上面几个 OID 返回的是**字节**时置 True，平台会自动换算成 MB。
+    # CISCO-SYSTEM-EXT-MIB 的 MemorySize / MemoryUsed 就是字节。
+    mem_total_bytes: bool = False
+    mem_used_bytes: bool = False
     temperature_oids: List[str] = field(default_factory=list)
     # 厂商特有指标：指标名 → OID 候补列表
     extra_oids: Dict[str, List[str]] = field(default_factory=dict)
@@ -81,6 +90,12 @@ class VendorProfile:
     log_cmd: List[str] = field(default_factory=list)
     version_cmd: List[str] = field(default_factory=list)
     interface_bulk: bool = True
+
+    # ---- 无线控制器专属 ----
+    # AP 列表与客户端列表在 SNMP 侧没有可用的标量（只有以 MAC/IP 为索引的表），
+    # 只能走 CLI。这两个命令按顺序尝试，命中即止。
+    wireless_ap_cmds: List[str] = field(default_factory=list)
+    wireless_client_cmds: List[str] = field(default_factory=list)
 
     # ---- 需要 WALK 才能取到的指标 ----
     # 有一类设备的 CPU / 内存指标是**带索引的表**（不是标量），
@@ -95,7 +110,13 @@ class VendorProfile:
 
     def all_sys_oids(self) -> List[str]:
         oids: List[str] = []
-        for group in (self.cpu_oids, self.mem_total_oids, self.mem_used_oids, self.temperature_oids):
+        for group in (
+            self.cpu_oids,
+            self.mem_total_oids,
+            self.mem_used_oids,
+            self.mem_pct_oids,
+            self.temperature_oids,
+        ):
             oids.extend(group)
         for group in self.extra_oids.values():
             oids.extend(group)
@@ -219,22 +240,36 @@ VENDORS: Dict[str, VendorProfile] = {
         desc="Cisco ASA 防火墙；额外采集连接数、CSC 表容量等安全设备专属指标",
         # CISCO-PROCESS-MIB + ASA 内存池
         cpu_oids=[
+            # CISCO-SYSTEM-EXT-MIB 的 CPU——ASA 实测可用（取值 10）
+            "1.3.6.1.4.1.9.9.43.1.1.4.0",  # ciscoSysMonExtCPUUtilization
             "1.3.6.1.4.1.9.9.109.1.1.1.1.8",
             "1.3.6.1.4.1.9.9.109.1.1.1.1.4",
             f"{OID_HR_PROCESSOR_LOAD}.1",
         ],
         mem_total_oids=[
+            # ciscoSysMonExtMemorySize（字节）——ASA 实测可用
+            "1.3.6.1.4.1.9.9.43.1.1.1.0",
             "1.3.6.1.4.1.9.9.48.1.1.1.6",
             OID_HR_MEMORY_SIZE,
         ],
         mem_used_oids=[
+            "1.3.6.1.4.1.9.9.43.1.1.2.0",  # ciscoSysMonExtMemoryUsed（ASA 上不准）
             "1.3.6.1.4.1.9.9.48.1.1.1.5",
         ],
+        # ASA 的 ciscoSysMonExtMemoryUsed 返回的值**大于**总内存
+        # （设备侧的历史缺陷），只有 MemoryUtilization 是准的
+        mem_pct_oids=[
+            "1.3.6.1.4.1.9.9.43.1.1.5.0",  # ciscoSysMonExtMemoryUtilization
+        ],
+        # CISCO-SYSTEM-EXT-MIB 的内存值单位是字节
+        mem_total_bytes=True,
+        mem_used_bytes=True,
         # ASA 特有：当前连接数、并发连接峰值、CSC 表项数
+        # CISCO-ASA-MIB 的正确层级是 ciscoASAConnStats(1.2).ciscoASAConnStatsTable(1)
         extra_oids={
-            "conn_count": ["1.3.6.1.4.1.9.9.166.1.1.1.1.0"],  # ciscoASAConnCount
-            "conn_peak": ["1.3.6.1.4.1.9.9.166.1.1.1.2.0"],  # ciscoASAConnPeak
-            "csc_table_size": ["1.3.6.1.4.1.9.9.166.1.1.2.3.0"],  # ciscoASACscTableSize
+            "conn_count": ["1.3.6.1.4.1.9.9.166.1.2.1.1.0"],  # ciscoASAConnCount
+            "conn_peak": ["1.3.6.1.4.1.9.9.166.1.2.1.2.0"],  # ciscoASAConnPeak
+            "csc_table_size": ["1.3.6.1.4.1.9.9.166.1.3.2.1.1.0"],  # ciscoASACscTableSize
         },
         extra_ssh_cmds={
             "conn_count": ["show connection count"],
@@ -252,30 +287,47 @@ VENDORS: Dict[str, VendorProfile] = {
         label="Cisco WLC 无线控制器",
         netmiko_device_type="cisco_wlc",
         category="无线控制器",
-        desc="Cisco WLC 无线控制器；额外采集 AP 数与客户端数等无线侧指标",
-        # CISCO-WLC-MIB / HOST-RESOURCES-MIB
+        desc="Cisco WLC 无线控制器；采集 AP 与客户端明细、AP 数与客户端数等无线侧指标",
+        # CISCO-WLC-MIB / CISCO-SYSTEM-EXT-MIB / HOST-RESOURCES-MIB
+        # WLC 的 CPU 在 CISCO-SYSTEM-EXT-MIB（ciscoSysMonExtCPUUtilization）
+        # —— 实测 14179.1.6.3.x 这条路径在设备上并不存在
         cpu_oids=[
-            "1.3.6.1.4.1.14179.1.6.3.6.0",  # ciscoWlcCpuUtilization
+            "1.3.6.1.4.1.9.9.43.1.1.4.0",  # ciscoSysMonExtCPUUtilization
+            "1.3.6.1.4.1.14179.1.1.1.11.0",  # ciscoWlcSysInfoCpuUtilization
             f"{OID_HR_PROCESSOR_LOAD}.1",
         ],
         mem_total_oids=[
-            "1.3.6.1.4.1.14179.1.6.3.5.0",  # ciscoWlcMemTotal
+            "1.3.6.1.4.1.9.9.43.1.1.1.0",  # ciscoSysMonExtMemorySize（字节）
+            "1.3.6.1.4.1.14179.1.1.1.10.0",  # ciscoWlcSysInfoMemTotal
             OID_HR_MEMORY_SIZE,
         ],
-        mem_used_oids=[
-            "1.3.6.1.4.1.14179.1.6.3.4.0",  # ciscoWlcMemUsed
-        ],
+        # WLC 的 ciscoSysMonExtMemoryUsed 与 MemoryUtilization 都不可信
+        # （实测 used≈size、utilization 返回 230），因此这里**不配** mem_used_oids
+        # 与 mem_pct_oids——让内存走 SSH 的 show memory statistics（那张表是准的）。
+        mem_used_oids=[],
+        mem_pct_oids=[],
+        # CISCO-SYSTEM-EXT-MIB 的内存值单位是字节
+        mem_total_bytes=True,
         # WLC 特有：已关联 AP 数、已关联客户端数
+        # 注意：IOS XE 的 WLC 没有这两个标量，实际数量靠 SSH 命令解析
         extra_oids={
             "ap_count": ["1.3.6.1.4.1.14179.1.1.1.13.0"],  # ciscoWlcApClientAssociated
             "client_count": ["1.3.6.1.4.1.14179.1.1.1.14.0"],  # ciscoWlcDot11ClientAssociated
         },
         extra_ssh_cmds={
             "ap_count": ["show ap summary"],
-            "client_count": ["show client summary"],
+            # AireOS 是 show client summary，IOS XE 是 show wireless client summary
+            "client_count": ["show wireless client summary", "show client summary"],
         },
         cpu_ssh_cmd=["show cpu usage"],
-        mem_ssh_cmd=["show memory usage"],
+        # IOS XE 的 WLC 只有 show memory statistics 能拿到准的内存数据
+        mem_ssh_cmd=["show memory statistics", "show memory usage"],
+        # 无线数据：IOS XE 与 AireOS 的命令不一样，按顺序尝试
+        wireless_ap_cmds=["show ap summary"],
+        wireless_client_cmds=[
+            "show wireless client summary",  # IOS XE
+            "show client summary",           # AireOS
+        ],
         backup_cmd=["show running-config"],
         log_cmd=["show messages | tail 200"],
         version_cmd=["show version"],

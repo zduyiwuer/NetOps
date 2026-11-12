@@ -30,6 +30,7 @@ NetFlow 会话分析、gNMI 遥测、配置备份、基线巡检与自动报告�
 | 设备管理 | 增删改查、Excel/CSV 批量导入导出、SNMP v1/v2c/v3 与 SSH 连通性测试、**单台/全量在线探测**；支持 8 类厂商 |
 | **防火墙会话** | **各防火墙实时会话数一览与会话趋势**（ASA 连接数 / 飞塔会话数 / VPN 隧道数 / 在线用户数） |
 | 实时接口速率 | IF-MIB 64 位计数器差分、协商速率自适应、利用率计算、Down/错包标识、**按门店筛选** |
+| 设备详情 | CPU/内存趋势、**接口流量趋势（可按接口过滤）**、接口列表、**无线 AP 与客户端明细** |
 | 资源监控 | CPU 使用率、内存使用率、设备温度、SNMP 响应时延、运行时长、历史曲线 |
 | 告警中心 | 阈值规则 + 持续时间 + 静默期 + 自动恢复；**详细告警内容（定位到具体接口）+ 门店筛选**；Webhook / 企业微信 / 钉钉 / 邮件通知 |
 | 日志中心 | **设备日志**（内置 Syslog UDP+TCP 接收服务 RFC3164/RFC5424、SSH 主动拉取）与**系统日志**（平台自身的运行问题：端口占用、采集器启动失败等），均支持按门店筛选 |
@@ -49,7 +50,7 @@ NetFlow 会话分析、gNMI 遥测、配置备份、基线巡检与自动报告�
 | **大屏自定义** | 自定义总览大屏显示的模块、顺序与宽度，配置本地持久化 |
 | **采集服务开关** | SNMP / Telemetry / NetFlow / Syslog 四通道运行时启停，无需重启 |
 | **定时任务配置** | 系统管理页直接编辑调度策略（cron / 间隔）、启停、立即执行、恢复默认 |
-| 总览大屏 | 设备健康度、流量趋势、CPU/内存 Top10、告警与日志摘要 |
+| 总览大屏 | 设备健康度、流量趋势、CPU/内存 Top10、告警与日志摘要、**按门店筛选** |
 
 ### 左侧导航栏
 
@@ -324,8 +325,8 @@ python -u -m scripts.verify_service    # 54 项：脚本齐全性、编码、hel
 | 项目 | 内容 |
 | --- | --- |
 | netmiko 类型 | `cisco_asa` |
-| CPU OID | `1.3.6.1.4.1.9.9.109.1.1.1.1.8`（CISCO-PROCESS-MIB 5min）→ HOST-RESOURCES-MIB |
-| 内存 OID | `1.3.6.1.4.1.9.9.48.1.1.1.5/6`（Cisco 内存池 Used/Total） |
+| CPU OID | `1.3.6.1.4.1.9.9.43.1.1.4.0`（CISCO-SYSTEM-EXT-MIB ciscoSysMonExtCPUUtilization）→ CISCO-PROCESS-MIB 5min → HOST-RESOURCES-MIB |
+| 内存 | `ciscoSysMonExtMemorySize`（字节）+ `ciscoSysMonExtMemoryUtilization`（百分比） |
 | SSH 兜底 | `show processes cpu` / `show memory statistics` |
 | 配置备份 | `show running-config`（含完整配置） |
 | 日志采集 | `show logging \| tail 200` |
@@ -335,20 +336,38 @@ python -u -m scripts.verify_service    # 54 项：脚本齐全性、编码、hel
 ASA 的连接数与 CSC 表容量是判断**会话表耗尽**（导致新连接被拒）的关键指标，
 平台通过 `ciscoASAConnCount` / `ciscoASACscTableSize` 采集，SSH 兜底用 `show connection count`。
 
+> **内存为什么用百分比**：ASA 的 `ciscoSysMonExtMemoryUsed` 返回 740037754，
+> 而总内存是 740037495——**已用比总量还大**（设备侧的历史缺陷）。
+> 只有 `ciscoSysMonExtMemoryUtilization`（实测 28）是准的，
+> 平台因此支持「设备直接给百分比」这种取值方式。
+>
+> **连接数取不到的情况**：部分 ASA 默认不开放 CISCO-ASA-MIB（`1.3.6.1.4.1.9.9.166`
+> 整棵树无数据），此时只能走 SSH `show connection count`；
+> 而老版本 ASA 的 SSH 只支持已被 paramiko 5 移除的老算法，
+> 平台会在系统日志里写明原因——需要在设备侧开放该 MIB 或升级固件。
+
 #### Cisco WLC 无线控制器（`cisco_wlc`）
 
 | 项目 | 内容 |
 | --- | --- |
 | netmiko 类型 | `cisco_wlc` |
-| CPU OID | `1.3.6.1.4.1.14179.1.6.3.6.0`（CISCO-WLC-MIB ciscoWlcCpuUtilization）→ HOST-RESOURCES-MIB |
-| 内存 OID | `1.3.6.1.4.1.14179.1.6.3.4.0` / `.5.0`（ciscoWlcMemUsed / MemTotal） |
-| SSH 兜底 | `show cpu usage` / `show memory usage` |
+| CPU OID | `1.3.6.1.4.1.9.9.43.1.1.4.0`（CISCO-SYSTEM-EXT-MIB ciscoSysMonExtCPUUtilization）→ `1.3.6.1.4.1.14179.1.1.1.11.0` → HOST-RESOURCES-MIB |
+| 内存 | 走 SSH `show memory statistics`（IOS XE 的表格：池名 / 区域 / 总量 / 已用 / 空闲，单位字节） |
+| 无线明细 | SSH `show ap summary` + `show wireless client summary`（AireOS 用 `show client summary`） |
+| SSH 兜底 | `show cpu usage` / `show memory statistics` |
 | 配置备份 | `show running-config` |
 | 日志采集 | `show messages \| tail 200` |
-| 特有指标 | **已关联 AP 数**、**已关联客户端数** |
+| 特有指标 | **AP 列表**、**无线客户端列表**、已关联 AP 数、已关联客户端数 |
 | 基线巡检 | 「Cisco WLC 无线控制器基线巡检」7 项：CPU/内存/可达性 + AP 数 + 客户端数 + 错包 + 运行时长 |
 
-AP 数用于确认**AP 是否掉线**（关联数骤降但客户端数不变，说明是 AP 侧问题而非终端侧）。
+> **为什么内存走 SSH**：WLC 的 `ciscoSysMonExtMemoryUsed` 返回值≈总内存（实测 1289405205 / 1289509711），
+> `MemoryUtilization` 又返回 230（不是百分比）——SNMP 侧的内存字段都不可信。
+> 只有 `show memory statistics` 那张表是准的（Processor 池 1743683116 / 435935448 = 25%）。
+>
+> **为什么 AP / 客户端明细走 SSH**：CISCO-WLC-MIB 里只有以 MAC / IP 为索引的表实例
+> （实测 6 万多项），没有「AP 数」「客户端数」的标量。
+>
+> AP 数用于确认**AP 是否掉线**（关联数骤降但客户端数不变，说明是 AP 侧问题而非终端侧）。
 
 #### 飞塔 FortiGate 防火墙（`fortinet`）
 
@@ -691,6 +710,12 @@ python -m scripts.verify_mib                # 24 项：多级索引解析、注�
 
 # 26. MIB 界面验证（需先启动后端服务）
 python -m scripts.verify_mib_ui             # 11 项：上传、检索、探测的界面交互
+
+# 27. 无线数据 / 门店筛选 / telemetry 综合验证（需先启动后端服务）
+python -m scripts.verify_wireless_and_filter # 40 项：厂商 OID 修正、WLC 无线数据、门店筛选、telemetry 趋势图
+
+# 28. 设备详情页验证（需先启动后端服务）
+python -m scripts.verify_device_detail      # 11 项：接口流量趋势图、WLC 无线数据展示
 ```
 
 > 容器内运行验证脚本时，需先启动服务并把 `BASE` 指向容器地址。
@@ -1038,8 +1063,44 @@ DELETE /api/logs/system/cleanup?days=30 # 清理过期日志
 
 ---
 
-## 九之九之四、厂商 MIB 文件上传与指标探测
+## 九之九之五、无线控制器数据（AP 与客户端）
 
+无线控制器（当前支持 Cisco WLC / IOS XE 与 AireOS）的无线侧数据，
+在设备详情页可以直接看到。
+
+### 页面内容
+
+- **统计卡片** —— 无线 AP 数（已注册数、型号数）、关联客户端数（协议数、有客户端的 AP 数）
+- **无线 AP 列表** —— AP 名称、型号、Slots、IP、以太网 MAC、Radio MAC、位置、国家、状态
+  （可按名称 / 型号 / IP 搜索）
+- **无线客户端列表** —— MAC、所属 AP、类型、类型 ID、协议、状态、认证方式、角色
+  （可按 AP 过滤、按 MAC / AP 名搜索）
+
+### 数据来源
+
+AP 与客户端明细**只能走 CLI**——CISCO-WLC-MIB 里只有以 MAC / IP 为索引的表实例
+（实测 6 万多项），没有「AP 数」「客户端数」这类标量。
+
+| 用途 | IOS XE | AireOS |
+| --- | --- | --- |
+| AP 列表 | `show ap summary` | `show ap summary` |
+| 客户端列表 | `show wireless client summary` | `show client summary` |
+
+平台按顺序尝试，命中即止。解析用正则锚定关键字段
+（AP 的 Location 可能含空格，不能按固定列切）。
+
+### 接口
+
+```http
+GET /api/devices/{device_id}/wireless/aps      # AP 列表（支持 keyword / state）
+GET /api/devices/{device_id}/wireless/clients  # 客户端列表（支持 keyword / ap_name）
+```
+
+数据表 `wireless_aps` / `wireless_clients`，每次采集整体替换，保留最新快照。
+
+---
+
+## 九之九之四、厂商 MIB 文件上传与指标探测
 设备厂商的私有指标（如飞塔的 `fgSysSesCount`、思科的 `ciscoASAConnCount`）
 在不同型号 / 固件上差异很大。平台内置的厂商 OID 候补表未必覆盖某个具体设备，
 而厂商 MIB 文件由设备厂商提供。
