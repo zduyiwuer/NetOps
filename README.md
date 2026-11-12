@@ -32,7 +32,7 @@ NetFlow 会话分析、gNMI 遥测、配置备份、基线巡检与自动报告�
 | 实时接口速率 | IF-MIB 64 位计数器差分、协商速率自适应、利用率计算、Down/错包标识、**按门店筛选** |
 | 设备详情 | CPU/内存趋势、**接口流量趋势（可按接口过滤）**、接口列表、**无线 AP 与客户端明细** |
 | 资源监控 | CPU 使用率、内存使用率、设备温度、SNMP 响应时延、运行时长、历史曲线 |
-| 告警中心 | 阈值规则 + 持续时间 + 静默期 + 自动恢复；**详细告警内容（定位到具体接口）+ 门店筛选**；Webhook / 企业微信 / 钉钉 / 邮件通知 |
+| 告警中心 | 阈值规则 + 持续时间 + 静默期 + 自动恢复；指标含 CPU/内存/流量/丢包/离线/**防火墙会话数**/**无线 AP 数**/**无线客户端数**/VPN 隧道/在线用户；**详细告警内容（定位到具体接口）+ 门店筛选**；Webhook / 企业微信 / 钉钉 / 邮件通知 |
 | 日志中心 | **设备日志**（内置 Syslog UDP+TCP 接收服务 RFC3164/RFC5424、SSH 主动拉取）与**系统日志**（平台自身的运行问题：端口占用、采集器启动失败等），均支持按门店筛选 |
 | 资产管理 | 资产编号、序列号、固件版本、采购/保修/合同信息、保修临期提醒 |
 | 门店管理 | 按门店/网点组织设备，统计各门店在线率、资产分布 |
@@ -716,6 +716,10 @@ python -m scripts.verify_wireless_and_filter # 40 项：厂商 OID 修正、WLC 
 
 # 28. 设备详情页验证（需先启动后端服务）
 python -m scripts.verify_device_detail      # 11 项：接口流量趋势图、WLC 无线数据展示
+
+# 29. 无线 SNMP / 告警新指标 / HTTP 上报 / 样本删除（需先启动后端服务）
+python -m scripts.verify_wireless_v2        # 28 项：SNMP 无线明细（信道/RSSI/SNR/流量）、漫游检测、
+                                            #       告警取值 session_count、HTTP 上报、样本删除、界面
 ```
 
 > 容器内运行验证脚本时，需先启动服务并把 `BASE` 指向容器地址。
@@ -1063,44 +1067,112 @@ DELETE /api/logs/system/cleanup?days=30 # 清理过期日志
 
 ---
 
-## 九之九之五、无线控制器数据（AP 与客户端）
+## 九之九之五、无线控制器数据（AP / 客户端 / 漫游）
 
-无线控制器（当前支持 Cisco WLC / IOS XE 与 AireOS）的无线侧数据，
+无线控制器（当前支持 Cisco WLC，IOS XE 与 AireOS 通用）的无线侧数据，
 在设备详情页可以直接看到。
 
 ### 页面内容
 
-- **统计卡片** —— 无线 AP 数（已注册数、型号数）、关联客户端数（协议数、有客户端的 AP 数）
-- **无线 AP 列表** —— AP 名称、型号、Slots、IP、以太网 MAC、Radio MAC、位置、国家、状态
-  （可按名称 / 型号 / IP 搜索）
-- **无线客户端列表** —— MAC、所属 AP、类型、类型 ID、协议、状态、认证方式、角色
-  （可按 AP 过滤、按 MAC / AP 名搜索）
+- **统计卡片** —— 无线 AP 数（正常数、型号数）、关联客户端数（SSID 数、有客户端的 AP 数）
+- **无线 AP 列表** —— 名称、型号、IP、**各 radio 信道**（如 `slot0: 6 / slot1: 52`）、
+  Radio MAC、序列号、位置、状态
+- **无线客户端列表** —— MAC、IP、所属 AP、SSID、**信道、RSSI（dBm，分级着色）、SNR、
+  已收 / 已发流量**、状态（可按 AP / SSID 过滤，按 MAC / AP / SSID 搜索）
+- **漫游记录** —— 客户端在 AP 之间切换的时间、路径（`AP-A → AP-B`）、
+  信道变化、漫游后 RSSI，**跨频段漫游**（2.4G ↔ 5G）自动标注
 
-### 数据来源
+### 数据来源：SNMP（AIRESPACE-WIRELESS-MIB）
 
-AP 与客户端明细**只能走 CLI**——CISCO-WLC-MIB 里只有以 MAC / IP 为索引的表实例
-（实测 6 万多项），没有「AP 数」「客户端数」这类标量。
+v1.18 起无线明细**从 CLI 改为 SNMP**——CLI 只有汇总信息，
+SNMP 能拿到信道 / RSSI / SNR / 收发流量等明细，且不依赖 SSH 凭据：
 
-| 用途 | IOS XE | AireOS |
+| 数据 | OID | 说明 |
 | --- | --- | --- |
-| AP 列表 | `show ap summary` | `show ap summary` |
-| 客户端列表 | `show wireless client summary` | `show client summary` |
+| AP 列表 | `1.3.6.1.4.1.14179.2.2.1.1` | bsnAPTable：名称(3) / 位置(4) / 状态(6) / 型号(16) / 序列号(17) / IP(19) |
+| 信道 | `1.3.6.1.4.1.14179.2.2.2.1.4` | bsnAPIfPhyChannelNumber，索引 = AP Radio MAC + slot（1-14 = 2.4G，34+ = 5G） |
+| 客户端主表 | `1.3.6.1.4.1.14179.2.1.4.1` | bsnMobileStationTable：MAC(1) / IP(2) / 用户名(3) / BSSID(4) / slot(5) / SSID(7) / 信号强度(8) |
+| 客户端统计 | `1.3.6.1.4.1.14179.2.1.6.1` | bsnMobileStationStatsTable：RSSI(1) / 收发字节(2/3) / 收发包(5/6) / SNR(26) |
 
-平台按顺序尝试，命中即止。解析用正则锚定关键字段
-（AP 的 Location 可能含空格，不能按固定列切）。
+> **两个解析坑**：
+> 1. 信道 OID 是叶子节点（`…2.2.2.1.4`），OID 后缀直接是 `<MAC 6 段>.<slot>`，
+>    没有列号段，不能按表根的方式解析；
+> 2. pysnmp 对 MacAddress 的解码不统一——有的返回十六进制字符串
+>    （`"1cd1e0754920"`），有的返回原始字节（`b"\x1c\xd1…"`），
+>    需统一规范化后才能与 AP 表关联。
+
+### 漫游记录
+
+SNMP / CLI 都没有现成的漫游历史——平台在**每次采集时对比上一批快照**，
+客户端的 BSSID 变化即记录一条漫游事件（含前后 AP、信道、漫游后 RSSI）。
+新旧记录的 MAC 格式可能不同（带点与不带点），对比前统一规范化。
 
 ### 接口
 
 ```http
-GET /api/devices/{device_id}/wireless/aps      # AP 列表（支持 keyword / state）
-GET /api/devices/{device_id}/wireless/clients  # 客户端列表（支持 keyword / ap_name）
+GET /api/devices/{device_id}/wireless/aps       # AP 列表（keyword / state）
+GET /api/devices/{device_id}/wireless/clients   # 客户端列表（keyword / ap_name / ssid）
+GET /api/devices/{device_id}/wireless/roaming   # 漫游记录（keyword / hours）
 ```
 
-数据表 `wireless_aps` / `wireless_clients`，每次采集整体替换，保留最新快照。
+数据表 `wireless_aps` / `wireless_clients`（快照，整体替换）与
+`wireless_roaming`（事件，追加）。
+
+## 九之九之六、采集优先级与 HTTP 遥测上报
+
+### 数据来源优先级：遥测 > SNMP > SSH
+
+监控指标按以下顺序取值：
+
+1. **遥测（gNMI）** —— 设备 5 分钟内有新鲜遥测样本的指标，
+   SNMP 采集不再覆盖（遥测是秒级推送，SNMP 是分钟级轮询，
+   用 SNMP 覆盖会把时间线拉粗）
+2. **SNMP** —— 常规轮询采集
+3. **SSH 兜底** —— SNMP 取不到时的最后手段，可通过系统设置
+   `collector.ssh_metrics_enabled=false` 整体关闭
+   （注意：WLC 的内存 SNMP 侧不可信，只有 CLI 是准的，关闭后该指标会缺失）
+
+无线明细（AP / 客户端 / 漫游）已全部改为 **SNMP 采集**，不依赖 SSH。
+
+### HTTP 遥测上报（客户端推送）
+
+除了 gNMI dial-out，平台还提供 **HTTP 上报接口**——脚本 / Agent /
+第三方系统都能推数据，与 gNMI 走同一套归一化管线：
+
+```bash
+curl -X POST http://<平台>/api/telemetry/ingest \
+  -H "X-Ingest-Token: <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "device": "sw",
+    "samples": [
+      {"metric": "cpu_usage", "value": 42.5},
+      {"metric": "mem_used", "value": 1234567},
+      {"metric": "if_in_octets", "value": 1000, "interface": "Gi1/0/1"}
+    ]
+  }'
+```
+
+- `device`：设备名或 IP（必须已在平台登记）
+- `samples`：最多 500 条，`metric` 与平台指标名一致
+  （`cpu_usage` / `mem_used` / `mem_total` / `if_in_octets` / `if_out_octets` / 自定义名）
+- **认证**：`X-Ingest-Token` 头（系统设置 `telemetry.ingest_token` 配置），
+  未配置或不匹配时退回平台用户 token（`Authorization: Bearer ...`）
+- 上报的样本在「遥测样本」里 `source=http`，趋势图与指标库同步更新
+
+### 遥测样本删除
+
+「Telemetry 遥测采样」页的**清理样本**按钮可删除样本
+（按当前筛选的指标，保留最近 24 小时）；也可调接口精确控制：
+
+```http
+DELETE /api/telemetry/samples?metric=&device_id=&older_than_hours=
+```
 
 ---
 
-## 九之九之四、厂商 MIB 文件上传与指标探测
+## 九之九之七、厂商 MIB 文件上传与指标探测
+
 设备厂商的私有指标（如飞塔的 `fgSysSesCount`、思科的 `ciscoASAConnCount`）
 在不同型号 / 固件上差异很大。平台内置的厂商 OID 候补表未必覆盖某个具体设备，
 而厂商 MIB 文件由设备厂商提供。

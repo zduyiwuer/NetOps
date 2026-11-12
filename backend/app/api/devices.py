@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
@@ -25,6 +25,7 @@ from app.models.models import (
     User,
     WirelessAP,
     WirelessClient,
+    WirelessRoaming,
 )
 from app.services import importer
 from app.services.scheduler import collect_device
@@ -622,7 +623,7 @@ def list_wireless_aps(
     db: Session = Depends(get_db),
     _: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
-    """无线控制器下挂的 AP 列表。"""
+    """无线控制器下挂的 AP 列表（SNMP 采集，含信道与序列号）。"""
     device = db.get(Device, device_id)
     if device is None:
         raise HTTPException(status_code=404, detail="设备不存在")
@@ -643,12 +644,13 @@ def list_wireless_aps(
                 "name": r.name,
                 "model": r.model,
                 "slots": r.slots,
-                "eth_mac": r.eth_mac,
                 "radio_mac": r.radio_mac,
                 "location": r.location,
-                "country": r.country,
+                "serial_number": r.serial_number,
                 "ip": r.ip,
+                "status": r.status,
                 "state": r.state,
+                "channels": r.channels,
                 "ts": r.ts.isoformat() if r.ts else "",
             }
             for r in rows
@@ -660,12 +662,13 @@ def list_wireless_aps(
 @router.get("/devices/{device_id}/wireless/clients")
 def list_wireless_clients(
     device_id: int,
-    keyword: str = Query("", description="按 MAC / AP 名搜索"),
+    keyword: str = Query("", description="按 MAC / AP 名 / SSID 搜索"),
     ap_name: str = Query("", description="按 AP 过滤"),
+    ssid: str = Query("", description="按 SSID 过滤"),
     db: Session = Depends(get_db),
     _: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
-    """无线控制器下的关联客户端列表。"""
+    """无线客户端列表（SNMP 采集，含信道 / RSSI / SNR / 收发流量）。"""
     device = db.get(Device, device_id)
     if device is None:
         raise HTTPException(status_code=404, detail="设备不存在")
@@ -673,22 +676,83 @@ def list_wireless_clients(
     if keyword:
         like = f"%{keyword.strip()}%"
         q = q.filter(
-            (WirelessClient.mac.like(like)) | (WirelessClient.ap_name.like(like))
+            (WirelessClient.mac.like(like))
+            | (WirelessClient.ap_name.like(like))
+            | (WirelessClient.ssid.like(like))
         )
     if ap_name:
         q = q.filter(WirelessClient.ap_name == ap_name)
+    if ssid:
+        q = q.filter(WirelessClient.ssid == ssid)
     rows = q.order_by(WirelessClient.ap_name, WirelessClient.mac).all()
+    # SSID 列表（前端筛选用）
+    ssids = sorted({r.ssid for r in rows if r.ssid})
     return {
         "items": [
             {
                 "mac": r.mac,
+                "ip": r.ip,
+                "username": r.username,
+                "bssid": r.bssid,
                 "ap_name": r.ap_name,
-                "type": r.type,
-                "type_id": r.type_id,
+                "ssid": r.ssid,
+                "slot": r.slot,
+                "channel": r.channel,
+                "signal_strength": r.signal_strength,
+                "rssi": r.rssi,
+                "snr": r.snr,
+                "bytes_in": r.bytes_in,
+                "bytes_out": r.bytes_out,
+                "packets_in": r.packets_in,
+                "packets_out": r.packets_out,
                 "state": r.state,
-                "protocol": r.protocol,
-                "method": r.method,
-                "role": r.role,
+                "ts": r.ts.isoformat() if r.ts else "",
+            }
+            for r in rows
+        ],
+        "total": len(rows),
+        "ssids": ssids,
+    }
+
+
+@router.get("/devices/{device_id}/wireless/roaming")
+def list_wireless_roaming(
+    device_id: int,
+    keyword: str = Query("", description="按 MAC / AP 名搜索"),
+    hours: int = Query(24, ge=1, le=720, description="近 N 小时"),
+    limit: int = Query(200, ge=1, le=2000),
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """无线客户端漫游记录（平台对比采集快照检测 AP 变化生成）。"""
+    device = db.get(Device, device_id)
+    if device is None:
+        raise HTTPException(status_code=404, detail="设备不存在")
+    since = datetime.now() - timedelta(hours=hours)
+    q = db.query(WirelessRoaming).filter(
+        WirelessRoaming.device_id == device_id,
+        WirelessRoaming.ts >= since,
+    )
+    if keyword:
+        like = f"%{keyword.strip()}%"
+        q = q.filter(
+            (WirelessRoaming.mac.like(like))
+            | (WirelessRoaming.from_ap.like(like))
+            | (WirelessRoaming.to_ap.like(like))
+        )
+    rows = q.order_by(WirelessRoaming.ts.desc()).limit(limit).all()
+    return {
+        "items": [
+            {
+                "mac": r.mac,
+                "from_ap": r.from_ap,
+                "to_ap": r.to_ap,
+                "from_bssid": r.from_bssid,
+                "to_bssid": r.to_bssid,
+                "from_channel": r.from_channel,
+                "to_channel": r.to_channel,
+                "rssi": r.rssi,
+                "snr": r.snr,
                 "ts": r.ts.isoformat() if r.ts else "",
             }
             for r in rows

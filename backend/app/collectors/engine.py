@@ -10,7 +10,7 @@ import logging
 import random
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.collectors.snmp import SnmpClient, SnmpError, target_from_device
@@ -87,6 +87,8 @@ class DeviceSample:
     # 无线控制器专属：AP 与客户端明细
     wireless_aps: List[Dict[str, Any]] = field(default_factory=list)
     wireless_clients: List[Dict[str, Any]] = field(default_factory=list)
+    # 本轮采集检测到的漫游事件
+    wireless_roaming: List[Dict[str, Any]] = field(default_factory=list)
 
 
 class RateTracker:
@@ -187,10 +189,17 @@ class Collector:
             # 直接当秒用会让运行时长偏大 100 倍
             if sample.system.uptime_sec:
                 sample.system.uptime_sec //= 100
-            sample.system.cpu_usage = _pick(values, self.vendor.cpu_oids)
+            # 同时有 SNMP 和 telemetry 时优先 telemetry——
+            # 查最近 5 分钟该设备的遥测指标，已有的指标不再用 SNMP 覆盖
+            tel_metrics = self._fresh_telemetry_metrics()
+            if "cpu_usage" not in tel_metrics:
+                sample.system.cpu_usage = _pick(values, self.vendor.cpu_oids)
             sample.system.temperature = _pick(values, self.vendor.temperature_oids)
             mem_total = _pick(values, self.vendor.mem_total_oids)
             mem_used = _pick(values, self.vendor.mem_used_oids)
+            # telemetry 已有内存数据时不用 SNMP 覆盖（同 CPU 的处理）
+            if any(m in tel_metrics for m in ("mem_used", "mem_total", "mem_free", "mem_available")):
+                mem_total = mem_used = None
             # 部分 MIB 返回的是字节，统一换算成 MB
             if mem_total is not None and self.vendor.mem_total_bytes:
                 mem_total = round(mem_total / 1024 / 1024, 2)
@@ -262,7 +271,13 @@ class Collector:
             sample.interfaces = await self._collect_interfaces(client)
 
         # 3) SNMP 拿不到 CPU/内存时，SSH 兜底
-        if collect_system and (sample.system.cpu_usage is None or sample.system.mem_usage is None):
+        #    可通过系统设置 collector.ssh_metrics_enabled=false 关闭——
+        #    监控数据优先走 SNMP / 遥测，SSH 只作为最后手段
+        if (
+            collect_system
+            and self._ssh_metrics_enabled()
+            and (sample.system.cpu_usage is None or sample.system.mem_usage is None)
+        ):
             if self.device.ssh_username and self.device.ssh_password:
                 try:
                     await self._enrich_via_ssh(sample)
@@ -270,7 +285,7 @@ class Collector:
                     self._log_ssh_failure("CPU/内存补采", exc)
 
         # 4) 厂商特有指标：SNMP 缺失时用 SSH 兜底
-        if collect_system and self.vendor.extra_ssh_cmds:
+        if collect_system and self._ssh_metrics_enabled() and self.vendor.extra_ssh_cmds:
             missing = [
                 name
                 for name in self.vendor.extra_ssh_cmds
@@ -285,62 +300,88 @@ class Collector:
                 except Exception as exc:
                     self._log_ssh_failure("厂商特有指标补采", exc)
 
-        # 5) 无线数据：AP 列表与客户端列表（仅无线控制器）
-        if collect_system and (
-            self.vendor.wireless_ap_cmds or self.vendor.wireless_client_cmds
-        ):
-            if self.device.ssh_username and self.device.ssh_password:
-                try:
-                    await self._collect_wireless(sample)
-                except Exception as exc:
-                    self._log_ssh_failure("无线数据采集", exc)
+        # 5) 无线数据：AP 列表与客户端列表（仅无线控制器，走 SNMP）
+        #    CLI 只有汇总，SNMP 能拿到信道 / RSSI / SNR / 收发流量等明细，
+        #    而且不依赖 SSH 凭据
+        if collect_system and self.vendor.wireless_snmp:
+            try:
+                await self._collect_wireless(sample)
+            except Exception as exc:
+                logger.info(
+                    "设备 %s 无线数据采集失败: %s", self.device.name, exc
+                )
 
         sample.system.reachable = True
         return sample
 
+    def _ssh_metrics_enabled(self) -> bool:
+        """监控指标的 SSH 兜底是否开启（系统设置，默认开）。
+
+        有些指标（如 WLC 的内存）SNMP 侧不可信，只有 CLI 是准的，
+        所以默认保留 SSH 兜底；需要纯 SNMP / 遥测采集时可关闭。
+        """
+        try:
+            from app.db.session import SessionLocal
+            from app.services import settings_service
+
+            db = SessionLocal()
+            try:
+                return bool(
+                    settings_service.get(
+                        db, "collector.ssh_metrics_enabled", True
+                    )
+                )
+            finally:
+                db.close()
+        except Exception:
+            return True
+
+    def _fresh_telemetry_metrics(self) -> set:
+        """最近 5 分钟内该设备有哪些遥测指标。
+
+        同时有 SNMP 和 telemetry 时优先 telemetry——
+        遥测已有新鲜数据的指标不再用 SNMP 采集，避免 SNMP 的粗粒度
+        采样覆盖遥测的细粒度推送。
+        """
+        try:
+            from app.db.session import SessionLocal
+            from app.models.models import TelemetrySample
+
+            db = SessionLocal()
+            try:
+                since = datetime.now() - timedelta(minutes=5)
+                rows = (
+                    db.query(TelemetrySample.metric)
+                    .filter(
+                        TelemetrySample.device_id == self.device.id,
+                        TelemetrySample.ts >= since,
+                    )
+                    .distinct()
+                    .all()
+                )
+                return {r[0] for r in rows}
+            finally:
+                db.close()
+        except Exception:
+            return set()
+
     async def _collect_wireless(self, sample: DeviceSample) -> None:
-        """采集并落库无线 AP 与客户端明细。"""
-        ssh = self._ssh_client()
-        aps = await ssh.fetch_wireless_aps()
-        clients = await ssh.fetch_wireless_clients()
+        """采集并落库无线 AP 与客户端明细（SNMP，含漫游检测）。"""
+        from app.collectors import wireless as wireless_collector
+
+        aps, clients = await wireless_collector.collect_wireless(
+            wireless_collector.target_from_device(self.device)
+        )
         if not aps and not clients:
             return
         sample.wireless_aps = aps
         sample.wireless_clients = clients
-        self._save_wireless(aps, clients)
-
-    def _save_wireless(
-        self,
-        aps: List[Dict[str, Any]],
-        clients: List[Dict[str, Any]],
-    ) -> None:
-        """把无线明细写入数据库（整体替换，保留最新快照）。"""
-        try:
-            from app.db.session import SessionLocal
-            from app.models.models import WirelessAP, WirelessClient
-
-            now = datetime.now()
-            db = SessionLocal()
-            try:
-                db.query(WirelessAP).filter(
-                    WirelessAP.device_id == self.device.id
-                ).delete(synchronize_session=False)
-                db.query(WirelessClient).filter(
-                    WirelessClient.device_id == self.device.id
-                ).delete(synchronize_session=False)
-                for a in aps:
-                    db.add(WirelessAP(device_id=self.device.id, ts=now, **a))
-                for c in clients:
-                    db.add(WirelessClient(device_id=self.device.id, ts=now, **c))
-                db.commit()
-            finally:
-                db.close()
+        events = wireless_collector.save_wireless(self.device.id, aps, clients)
+        if events:
+            sample.wireless_roaming = events
             logger.info(
-                "设备 %s 的无线数据已更新：%d 个 AP / %d 个客户端",
-                self.device.name, len(aps), len(clients),
+                "设备 %s 检测到 %d 条漫游记录", self.device.name, len(events)
             )
-        except Exception as exc:
-            logger.debug("保存无线数据失败: %s", exc)
 
     async def _collect_interfaces(self, client: SnmpClient) -> List[InterfaceSample]:
         """采集接口表。

@@ -92,8 +92,10 @@ class VendorProfile:
     interface_bulk: bool = True
 
     # ---- 无线控制器专属 ----
-    # AP 列表与客户端列表在 SNMP 侧没有可用的标量（只有以 MAC/IP 为索引的表），
-    # 只能走 CLI。这两个命令按顺序尝试，命中即止。
+    # 无线明细（AP / 客户端 / 漫游）走 SNMP 采集
+    # （AIRESPACE-WIRELESS-MIB 的 bsnAPTable / bsnMobileStationTable 等）
+    wireless_snmp: bool = False
+    # 旧方案：CLI 采集无线明细（已弃用，保留字段兼容历史配置）
     wireless_ap_cmds: List[str] = field(default_factory=list)
     wireless_client_cmds: List[str] = field(default_factory=list)
 
@@ -322,12 +324,8 @@ VENDORS: Dict[str, VendorProfile] = {
         cpu_ssh_cmd=["show cpu usage"],
         # IOS XE 的 WLC 只有 show memory statistics 能拿到准的内存数据
         mem_ssh_cmd=["show memory statistics", "show memory usage"],
-        # 无线数据：IOS XE 与 AireOS 的命令不一样，按顺序尝试
-        wireless_ap_cmds=["show ap summary"],
-        wireless_client_cmds=[
-            "show wireless client summary",  # IOS XE
-            "show client summary",           # AireOS
-        ],
+        # 无线明细走 SNMP（AIRESPACE-WIRELESS-MIB），含信道 / RSSI / SNR / 收发流量
+        wireless_snmp=True,
         backup_cmd=["show running-config"],
         log_cmd=["show messages | tail 200"],
         version_cmd=["show version"],

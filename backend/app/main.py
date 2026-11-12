@@ -69,6 +69,11 @@ FRONTEND_DIST = _resolve_frontend_dist()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # 无线表结构变更（SSH 采集 → SNMP 采集）时重建：
+    # 旧表的 eth_mac 等列带 NOT NULL 约束，新模型已删这些列，
+    # SQLite 的 ALTER 无法去掉，直接 DROP 重建——无线数据是快照，
+    # 下次采集自动补全
+    _rebuild_wireless_tables_if_stale()
     # 建表
     Base.metadata.create_all(bind=engine)
     _migrate_schema()
@@ -217,6 +222,36 @@ async def audit_middleware(request: Request, call_next):
 
 
 # ---------------------------------------------------------------- 初始化数据
+def _rebuild_wireless_tables_if_stale() -> None:
+    """无线表结构过期时重建。
+
+    v1.17 的无线数据从 SSH 采集改为 SNMP 采集，模型删掉了
+    eth_mac / country / type / protocol 等列；旧表这些列带
+    NOT NULL 约束（无默认值），SQLite 删不掉，导致 INSERT 失败。
+    无线数据是每次采集整体替换的快照，直接 DROP 重建即可。
+    """
+    try:
+        import sqlalchemy as sa
+
+        inspector = sa.inspect(engine)
+        tables = set(inspector.get_table_names())
+        stale = []
+        for name in ("wireless_aps", "wireless_clients"):
+            if name not in tables:
+                continue
+            cols = {c["name"] for c in inspector.get_columns(name)}
+            dropped = {"eth_mac", "country", "type", "type_id", "protocol", "method", "role"}
+            if cols & dropped:
+                stale.append(name)
+        if stale:
+            with engine.begin() as conn:
+                for name in stale:
+                    conn.execute(sa.text(f"DROP TABLE IF EXISTS {name}"))
+            logger.info("无线表结构已更新，重建: %s", ", ".join(stale))
+    except Exception as exc:
+        logger.warning("无线表重建检查失败: %s", exc)
+
+
 def _migrate_schema() -> None:
     """轻量 schema 迁移：为 SQLite 已有表补齐新增列。
 

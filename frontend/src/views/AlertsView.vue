@@ -506,6 +506,13 @@ const metricOptions = [
   { value: 'offline', label: '设备离线' },
   { value: 'interface_down', label: 'Down 接口数' },
   { value: 'response_time', label: 'SNMP 响应 (ms)' },
+  // 防火墙 / 无线指标（来自厂商特有采集，存 extra_metrics）
+  { value: 'session_count', label: '防火墙会话数' },
+  { value: 'conn_count', label: '防火墙连接数 (ASA)' },
+  { value: 'ap_count', label: '无线 AP 数' },
+  { value: 'client_count', label: '无线客户端数' },
+  { value: 'vpn_tunnel_count', label: 'VPN 隧道数' },
+  { value: 'user_count', label: '在线用户数' },
 ]
 
 function metricText(m) {

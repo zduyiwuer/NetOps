@@ -68,13 +68,13 @@ def main() -> int:
             if s.wireless_aps:
                 a = s.wireless_aps[0]
                 check("AP 字段完整",
-                      all(a.get(k) for k in ("name", "model", "eth_mac", "ip", "state")),
-                      f"{a['name']} / {a['model']} / {a['ip']} / {a['state']}")
+                      all(a.get(k) for k in ("name", "model", "radio_mac", "ip", "state", "channels")),
+                      f"{a['name']} / {a['model']} / {a['ip']} / {a['state']} / {a['channels']}")
             if s.wireless_clients:
-                c = s.wireless_clients[0]
+                c = next((x for x in s.wireless_clients if x["ap_name"]), s.wireless_clients[0])
                 check("客户端字段完整",
-                      all(c.get(k) for k in ("mac", "ap_name", "type", "state", "protocol")),
-                      f"{c['mac']} / {c['ap_name']} / {c['protocol']}")
+                      all(c.get(k) for k in ("mac", "ap_name", "ssid", "state")),
+                      f"{c['mac']} / {c['ap_name']} / {c['ssid']} / ch{c['channel']} rssi{c['rssi']}")
         else:
             check("存在 WLC 设备", False, "未找到")
 

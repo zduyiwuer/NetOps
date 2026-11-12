@@ -428,8 +428,8 @@ class MibNode(Base):
 class WirelessAP(Base):
     """无线控制器下挂的 AP（Access Point）。
 
-    通过 SSH `show ap summary` 采集——SNMP 侧没有 AP 列表的标量，
-    只有一堆以 MAC 为索引的表实例。
+    通过 SNMP 采集 AIRESPACE-WIRELESS-MIB 的 bsnAPTable / bsnAPIfTable——
+    CLI（show ap summary）只有汇总信息，SNMP 能拿到信道 / 序列号等更多字段。
     """
 
     __tablename__ = "wireless_aps"
@@ -442,17 +442,26 @@ class WirelessAP(Base):
     name: Mapped[str] = mapped_column(String(120), default="")
     model: Mapped[str] = mapped_column(String(80), default="")
     slots: Mapped[int] = mapped_column(Integer, default=0)
-    eth_mac: Mapped[str] = mapped_column(String(32), default="")
+    # AP 的 Radio MAC（客户端表用它关联 AP）
     radio_mac: Mapped[str] = mapped_column(String(32), default="")
     location: Mapped[str] = mapped_column(String(160), default="")
-    country: Mapped[str] = mapped_column(String(16), default="")
+    serial_number: Mapped[str] = mapped_column(String(80), default="")
     ip: Mapped[str] = mapped_column(String(64), default="")
+    # 运行状态（1=正常 / 2=下载中 / 3=未关联）
+    status: Mapped[int] = mapped_column(Integer, default=0)
     state: Mapped[str] = mapped_column(String(48), default="")
+    # 各 slot 的信道，如 "slot0: 11 / slot1: 52"
+    channels: Mapped[str] = mapped_column(String(120), default="")
     ts: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
 
 
 class WirelessClient(Base):
-    """无线控制器下的关联客户端。"""
+    """无线控制器下的关联客户端。
+
+    通过 SNMP 采集 AIRESPACE-WIRELESS-MIB 的
+    bsnMobileStationTable（主表）+ bsnMobileStationStatsTable（统计表），
+    信道来自 bsnAPIfPhyChannelNumber（按 AP MAC + slot 索引）。
+    """
 
     __tablename__ = "wireless_clients"
     __table_args__ = (Index("ix_wc_dev", "device_id"),)
@@ -462,14 +471,57 @@ class WirelessClient(Base):
         ForeignKey("devices.id", ondelete="CASCADE"), index=True
     )
     mac: Mapped[str] = mapped_column(String(32), default="")
+    ip: Mapped[str] = mapped_column(String(64), default="")
+    username: Mapped[str] = mapped_column(String(120), default="")
+    # 关联 AP 的 Radio MAC，即 BSSID
+    bssid: Mapped[str] = mapped_column(String(32), default="")
     ap_name: Mapped[str] = mapped_column(String(120), default="")
-    # WLAN / 802.11a / 802.11b 等
-    type: Mapped[str] = mapped_column(String(32), default="")
-    type_id: Mapped[int] = mapped_column(Integer, default=0)
+    ssid: Mapped[str] = mapped_column(String(120), default="")
+    # AP 的 radio slot（0 = 2.4G / 1 = 5G）
+    slot: Mapped[int] = mapped_column(Integer, default=0)
+    # 客户端所在信道（由 AP radio 决定）
+    channel: Mapped[int] = mapped_column(Integer, default=0)
+    # 信号强度（dBm，客户端表 bsnMobileStationSignalStrength）
+    signal_strength: Mapped[int] = mapped_column(Integer, default=0)
+    # RSSI（dBm，统计表 bsnMobileStationRSSI）
+    rssi: Mapped[int] = mapped_column(Integer, default=0)
+    # 信噪比（dB，统计表 bsnMobileStationSnr）
+    snr: Mapped[int] = mapped_column(Integer, default=0)
+    # 收发流量（统计表）
+    bytes_in: Mapped[int] = mapped_column(Integer, default=0)
+    bytes_out: Mapped[int] = mapped_column(Integer, default=0)
+    packets_in: Mapped[int] = mapped_column(Integer, default=0)
+    packets_out: Mapped[int] = mapped_column(Integer, default=0)
     state: Mapped[str] = mapped_column(String(48), default="")
-    protocol: Mapped[str] = mapped_column(String(48), default="")
-    method: Mapped[str] = mapped_column(String(48), default="")
-    role: Mapped[str] = mapped_column(String(48), default="")
+    ts: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
+
+
+class WirelessRoaming(Base):
+    """无线客户端漫游记录。
+
+    SNMP / CLI 都没有现成的漫游历史——平台在每次采集时对比
+    客户端所在的 AP，发现变化即记录一条漫游事件。
+    """
+
+    __tablename__ = "wireless_roaming"
+    __table_args__ = (Index("ix_wr_dev", "device_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    device_id: Mapped[int] = mapped_column(
+        ForeignKey("devices.id", ondelete="CASCADE"), index=True
+    )
+    mac: Mapped[str] = mapped_column(String(32), default="")
+    # 漫游前后的 AP 名
+    from_ap: Mapped[str] = mapped_column(String(120), default="")
+    to_ap: Mapped[str] = mapped_column(String(120), default="")
+    # 漫游前后的 BSSID
+    from_bssid: Mapped[str] = mapped_column(String(32), default="")
+    to_bssid: Mapped[str] = mapped_column(String(32), default="")
+    # 漫游前后的信道（跨频段漫游时信道差异很大）
+    from_channel: Mapped[int] = mapped_column(Integer, default=0)
+    to_channel: Mapped[int] = mapped_column(Integer, default=0)
+    rssi: Mapped[int] = mapped_column(Integer, default=0)
+    snr: Mapped[int] = mapped_column(Integer, default=0)
     ts: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
 
 

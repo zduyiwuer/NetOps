@@ -135,6 +135,24 @@ async def evaluate_rules(
     return fired
 
 
+def _extra_metric(metric_row: DeviceMetric, name: str) -> Optional[float]:
+    """从 extra_metrics（JSON 字符串）里取厂商特有指标。"""
+    raw = getattr(metric_row, "extra_metrics", None)
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw) if isinstance(raw, str) else raw
+    except (ValueError, TypeError):
+        return None
+    v = data.get(name)
+    if v is None:
+        return None
+    try:
+        return float(v)
+    except (ValueError, TypeError):
+        return None
+
+
 def _extract_value(
     metric: str,
     device: Device,
@@ -155,6 +173,16 @@ def _extract_value(
         return metric_row.temperature
     if metric == "response_time":
         return metric_row.response_ms
+    # 防火墙 / 无线等厂商特有指标：存在 extra_metrics（JSON 字符串）里
+    if metric in (
+        "session_count",   # 防火墙当前会话数（飞塔 fgSysSesCount 等）
+        "conn_count",      # ASA 当前连接数
+        "ap_count",        # 无线 AP 数
+        "client_count",    # 无线客户端数
+        "vpn_tunnel_count",  # VPN 隧道数
+        "user_count",      # 在线用户数
+    ):
+        return _extra_metric(metric_row, metric)
     if metric in ("traffic", "util", "loss", "interface_down"):
         if not interfaces:
             return None

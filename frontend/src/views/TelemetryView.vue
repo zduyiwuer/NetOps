@@ -226,6 +226,17 @@
           <span class="text-muted" style="font-size: 12px">
             最新 {{ samples.length }} 条原始采样
           </span>
+          <el-button
+            v-if="userStore.canOperate"
+            size="small"
+            type="danger"
+            plain
+            :icon="Delete"
+            :loading="clearing"
+            @click="clearSamples"
+          >
+            清理样本
+          </el-button>
         </div>
         <el-table :data="samples" size="small" stripe max-height="360">
           <el-table-column prop="ts" label="时间" width="150">
@@ -343,7 +354,7 @@
 <script setup>
 import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Connection, DataLine, List, Monitor, Plus, QuestionFilled, Refresh, Search } from '@element-plus/icons-vue'
+import { Connection, DataLine, Delete, List, Monitor, Plus, QuestionFilled, Refresh, Search } from '@element-plus/icons-vue'
 import BaseChart from '../components/BaseChart.vue'
 import DeviceSelect from '../components/DeviceSelect.vue'
 import { telemetryApi } from '../api'
@@ -456,6 +467,34 @@ async function loadSamples() {
     samples.value = res.items || []
   } catch (e) {
     samples.value = []
+  }
+}
+
+// ---------------------------------------------------------------- 样本清理
+const clearing = ref(false)
+
+async function clearSamples() {
+  try {
+    await ElMessageBox.confirm(
+      '将删除遥测样本（按当前筛选的指标，保留最近 24 小时）。确定继续吗？',
+      '清理遥测样本',
+      { type: 'warning', confirmButtonText: '清理', cancelButtonText: '取消' },
+    )
+  } catch (e) {
+    return
+  }
+  clearing.value = true
+  try {
+    const res = await telemetryApi.deleteSamples({
+      metric: sampleMetric.value || undefined,
+      older_than_hours: 24,
+    })
+    ElMessage.success(`已清理 ${res.deleted} 条遥测样本`)
+    reload()
+  } catch (e) {
+    ElMessage.error('清理失败')
+  } finally {
+    clearing.value = false
   }
 }
 

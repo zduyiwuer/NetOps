@@ -52,7 +52,7 @@
         <div class="label"><el-icon><User /></el-icon>关联客户端</div>
         <div class="value" style="font-size: 20px">{{ wirelessClients.length }}</div>
         <div class="foot">
-          {{ clientProtocols.length }} 种协议 ·
+          {{ clientSsids.length }} 个 SSID ·
           {{ clientApCount }} 个 AP 有客户端
         </div>
       </div>
@@ -237,20 +237,24 @@
           size="small"
           stripe
           max-height="420"
-          empty-text="暂无 AP 数据（需通过 SSH 采集）"
+          empty-text="暂无 AP 数据"
         >
-          <el-table-column prop="name" label="AP 名称" min-width="140" show-overflow-tooltip />
+          <el-table-column prop="name" label="AP 名称" min-width="130" show-overflow-tooltip />
           <el-table-column prop="model" label="型号" width="110" show-overflow-tooltip />
-          <el-table-column prop="slots" label="Slots" width="70" align="center" />
-          <el-table-column prop="ip" label="IP 地址" width="140" class-name="mono" show-overflow-tooltip />
-          <el-table-column prop="eth_mac" label="以太网 MAC" width="140" class-name="mono" show-overflow-tooltip />
-          <el-table-column prop="radio_mac" label="Radio MAC" width="140" class-name="mono" show-overflow-tooltip />
-          <el-table-column prop="location" label="位置" min-width="120" show-overflow-tooltip />
-          <el-table-column prop="country" label="国家" width="70" align="center" />
-          <el-table-column label="状态" width="110" align="center">
+          <el-table-column prop="ip" label="IP 地址" width="135" class-name="mono" show-overflow-tooltip />
+          <el-table-column prop="channels" label="信道" width="140" class-name="mono" show-overflow-tooltip>
             <template #default="{ row }">
-              <el-tag size="small" effect="plain" :type="apStateType(row.state)">
-                {{ row.state }}
+              <span v-if="row.channels">{{ row.channels }}</span>
+              <span v-else class="text-muted">-</span>
+            </template>
+          </el-table-column>
+          <el-table-column prop="radio_mac" label="Radio MAC" width="135" class-name="mono" show-overflow-tooltip />
+          <el-table-column prop="serial_number" label="序列号" width="130" class-name="mono" show-overflow-tooltip />
+          <el-table-column prop="location" label="位置" min-width="120" show-overflow-tooltip />
+          <el-table-column label="状态" width="90" align="center">
+            <template #default="{ row }">
+              <el-tag size="small" effect="plain" :type="row.status === 1 ? 'success' : 'danger'">
+                {{ row.state || row.status }}
               </el-tag>
             </template>
           </el-table-column>
@@ -265,8 +269,9 @@
               v-model="clientApFilter"
               placeholder="全部 AP"
               clearable
+              filterable
               size="small"
-              style="width: 170px"
+              style="width: 160px"
               @change="loadWireless"
             >
               <el-option
@@ -276,12 +281,23 @@
                 :value="a.name"
               />
             </el-select>
+            <el-select
+              v-model="clientSsidFilter"
+              placeholder="全部 SSID"
+              clearable
+              filterable
+              size="small"
+              style="width: 160px"
+              @change="loadWireless"
+            >
+              <el-option v-for="s in clientSsids" :key="s" :label="s" :value="s" />
+            </el-select>
             <el-input
               v-model="clientKeyword"
-              placeholder="搜索 MAC / AP"
+              placeholder="搜索 MAC / AP / SSID"
               clearable
               size="small"
-              style="width: 180px"
+              style="width: 190px"
               :prefix-icon="Search"
               @keyup.enter="loadWireless"
             />
@@ -294,22 +310,83 @@
           size="small"
           stripe
           max-height="420"
-          empty-text="暂无客户端数据（需通过 SSH 采集）"
+          empty-text="暂无客户端数据"
         >
-          <el-table-column prop="mac" label="MAC 地址" width="150" class-name="mono" show-overflow-tooltip />
-          <el-table-column prop="ap_name" label="所属 AP" min-width="140" show-overflow-tooltip />
-          <el-table-column prop="type" label="类型" width="90" align="center" />
-          <el-table-column prop="type_id" label="类型 ID" width="80" align="center" />
-          <el-table-column prop="protocol" label="协议" width="100" align="center" />
-          <el-table-column prop="state" label="状态" width="90" align="center">
+          <el-table-column prop="mac" label="MAC 地址" width="135" class-name="mono" show-overflow-tooltip />
+          <el-table-column prop="ip" label="IP 地址" width="130" class-name="mono" show-overflow-tooltip />
+          <el-table-column prop="ap_name" label="所属 AP" min-width="115" show-overflow-tooltip />
+          <el-table-column prop="ssid" label="SSID" min-width="130" show-overflow-tooltip />
+          <el-table-column label="信道" width="70" align="center">
+            <template #default="{ row }">
+              <span class="mono">{{ row.channel || '-' }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="RSSI" width="80" align="center">
+            <template #default="{ row }">
+              <span :class="rssiClass(row.rssi)">{{ row.rssi ? row.rssi + ' dBm' : '-' }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="SNR" width="70" align="center">
+            <template #default="{ row }">
+              <span class="mono">{{ row.snr ? row.snr + ' dB' : '-' }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="已收 / 已发" width="150" align="right">
+            <template #default="{ row }">
+              <span class="text-muted" style="font-size: 12px">
+                ↓{{ fmtBytes(row.bytes_in) }} / ↑{{ fmtBytes(row.bytes_out) }}
+              </span>
+            </template>
+          </el-table-column>
+          <el-table-column prop="state" label="状态" width="85" align="center">
             <template #default="{ row }">
               <el-tag size="small" effect="plain" :type="row.state === 'Run' ? 'success' : 'info'">
                 {{ row.state }}
               </el-tag>
             </template>
           </el-table-column>
-          <el-table-column prop="method" label="认证方式" width="110" align="center" show-overflow-tooltip />
-          <el-table-column prop="role" label="角色" width="100" align="center" show-overflow-tooltip />
+        </el-table>
+      </div>
+
+      <div class="table-card" style="margin-top: 12px">
+        <div class="card-title">
+          <span>漫游记录</span>
+          <span class="text-muted" style="font-size: 12px">
+            客户端在 AP 之间切换时自动记录（含跨频段漫游）
+          </span>
+        </div>
+        <el-table
+          v-loading="roamingLoading"
+          :data="roamingEvents"
+          size="small"
+          stripe
+          max-height="360"
+          empty-text="近 24 小时没有漫游记录"
+        >
+          <el-table-column prop="ts" label="时间" width="160">
+            <template #default="{ row }">{{ (row.ts || '').replace('T', ' ').slice(0, 19) }}</template>
+          </el-table-column>
+          <el-table-column prop="mac" label="客户端 MAC" width="135" class-name="mono" show-overflow-tooltip />
+          <el-table-column label="漫游路径" min-width="280">
+            <template #default="{ row }">
+              <span class="text-muted">{{ row.from_ap || row.from_bssid }}</span>
+              <span style="margin: 0 6px">→</span>
+              <span :class="row.from_ap !== row.to_ap ? 'text-ok' : ''">{{ row.to_ap || row.to_bssid }}</span>
+              <el-tag v-if="isBandRoam(row)" size="small" type="warning" effect="plain" style="margin-left: 6px">
+                跨频段
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="信道变化" width="120" align="center">
+            <template #default="{ row }">
+              <span class="mono">{{ row.from_channel || '-' }} → {{ row.to_channel || '-' }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="漫游后 RSSI" width="110" align="center">
+            <template #default="{ row }">
+              <span :class="rssiClass(row.rssi)">{{ row.rssi ? row.rssi + ' dBm' : '-' }}</span>
+            </template>
+          </el-table-column>
         </el-table>
       </div>
     </template>
@@ -420,7 +497,7 @@ async function loadMetrics() {
 async function loadAll() {
   // 先加载设备信息——会话/无线数据依赖 device.vendor 判断设备类型
   await loadDevice()
-  await Promise.all([loadInterfaces(), loadMetrics(), loadWireless()])
+  await Promise.all([loadInterfaces(), loadMetrics(), loadWireless(), loadRoaming()])
   // 接口列表就绪后再取趋势（要按流量挑接口）
   await loadIfaceHistory()
 }
@@ -582,29 +659,46 @@ const wirelessLoading = ref(false)
 const apKeyword = ref('')
 const clientKeyword = ref('')
 const clientApFilter = ref('')
+const clientSsidFilter = ref('')
+const clientSsids = ref([])
+const roamingEvents = ref([])
+const roamingLoading = ref(false)
 
 const WIRELESS_VENDORS = ['cisco_wlc', 'aruba', 'h3c_wlc']
 const isWireless = computed(() => WIRELESS_VENDORS.includes(device.value?.vendor))
 
 const registeredApCount = computed(
-  () => wirelessAps.value.filter((a) => /registered/i.test(a.state || '')).length,
+  () => wirelessAps.value.filter((a) => a.status === 1).length,
 )
 const apModels = computed(
   () => [...new Set(wirelessAps.value.map((a) => a.model).filter(Boolean))],
-)
-const clientProtocols = computed(
-  () => [...new Set(wirelessClients.value.map((c) => c.protocol).filter(Boolean))],
 )
 const clientApCount = computed(
   () => new Set(wirelessClients.value.map((c) => c.ap_name).filter(Boolean)).size,
 )
 
-function apStateType(state) {
-  const s = (state || '').toLowerCase()
-  if (s.includes('registered') && !s.includes('not')) return 'success'
-  if (s.includes('not')) return 'danger'
-  if (s.includes('registered')) return 'warning'
-  return 'info'
+// RSSI 分级：>-65 优秀 / -65~-75 一般 / <-75 较弱
+function rssiClass(rssi) {
+  if (!rssi) return 'text-muted'
+  if (rssi >= -65) return 'text-ok'
+  if (rssi >= -75) return ''
+  return 'text-danger'
+}
+
+// 跨频段漫游：2.4G（信道 1-14）与 5G（信道 34+）之间切换
+function isBandRoam(row) {
+  const a = row.from_channel || 0
+  const b = row.to_channel || 0
+  if (!a || !b) return false
+  return (a <= 14 && b >= 34) || (a >= 34 && b <= 14)
+}
+
+function fmtBytes(n) {
+  if (!n) return '0'
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
+  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`
+  return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`
 }
 
 async function loadWireless() {
@@ -616,15 +710,30 @@ async function loadWireless() {
       deviceApi.wirelessClients(deviceId.value, {
         keyword: clientKeyword.value || undefined,
         ap_name: clientApFilter.value || undefined,
+        ssid: clientSsidFilter.value || undefined,
       }),
     ])
     wirelessAps.value = apRes?.items || []
     wirelessClients.value = cliRes?.items || []
+    clientSsids.value = cliRes?.ssids || []
   } catch (e) {
     wirelessAps.value = []
     wirelessClients.value = []
   } finally {
     wirelessLoading.value = false
+  }
+}
+
+async function loadRoaming() {
+  if (!isWireless.value) return
+  roamingLoading.value = true
+  try {
+    const res = await deviceApi.wirelessRoaming(deviceId.value, { hours: 24 })
+    roamingEvents.value = res?.items || []
+  } catch (e) {
+    roamingEvents.value = []
+  } finally {
+    roamingLoading.value = false
   }
 }
 

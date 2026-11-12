@@ -2,10 +2,10 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -465,6 +465,121 @@ def list_samples(
             for s in rows
         ]
     }
+
+
+@telemetry_router.delete("/samples")
+def delete_samples(
+    device_id: Optional[int] = None,
+    metric: Optional[str] = None,
+    older_than_hours: Optional[int] = Query(
+        None, ge=1, description="只删 N 小时之前的样本；留空则按全部条件删"
+    ),
+    db: Session = Depends(get_db),
+    _: User = Depends(require_operator),
+) -> Dict[str, Any]:
+    """删除遥测样本（按设备 / 指标 / 时间范围筛选）。"""
+    q = db.query(TelemetrySample)
+    if device_id:
+        q = q.filter(TelemetrySample.device_id == device_id)
+    if metric:
+        q = q.filter(TelemetrySample.metric == metric)
+    if older_than_hours:
+        cutoff = datetime.now() - timedelta(hours=older_than_hours)
+        q = q.filter(TelemetrySample.ts < cutoff)
+    n = q.delete(synchronize_session=False)
+    db.commit()
+    return {"ok": True, "deleted": n}
+
+
+@telemetry_router.post("/ingest")
+async def ingest(
+    request: Request,
+    payload: Dict[str, Any],
+    db: Session = Depends(get_db),
+) -> Dict[str, Any]:
+    """HTTP 遥测上报：客户端（脚本 / Agent / 第三方系统）推送指标。
+
+    与 gNMI dial-out 走同一套归一化管线，无需 gNMI 客户端。
+
+    请求体::
+
+        {
+          "device": "sw",                 // 设备名或 IP（必填）
+          "samples": [
+            {"metric": "cpu_usage", "value": 42.5},
+            {"metric": "mem_used", "value": 1234567},
+            {"metric": "if_in_octets", "value": 1000, "interface": "Gi1/0/1"}
+          ]
+        }
+
+    认证：Header `X-Ingest-Token`，与系统设置 telemetry.ingest_token 比对；
+    未设置 token 或不匹配时退回平台用户 token（Authorization: Bearer ...）。
+    """
+    from app.collectors.telemetry import TelemetrySample
+    from app.services import settings_service
+
+    # ---- 认证：ingest token 或平台用户 token 二选一
+    ingest_token = str(settings_service.get(db, "telemetry.ingest_token", "") or "")
+    provided = request.headers.get("x-ingest-token", "") or str(payload.get("token") or "")
+    if not (ingest_token and provided and provided == ingest_token):
+        auth_header = request.headers.get("authorization", "")
+        ok = False
+        if auth_header.startswith("Bearer "):
+            try:
+                from app.core.security import decode_token
+                ok = decode_token(auth_header[7:]) is not None
+            except Exception:
+                ok = False
+        if not ok:
+            raise HTTPException(
+                status_code=401, detail="需要 X-Ingest-Token 或平台用户 token"
+            )
+
+    # ---- 解析设备
+    dev_key = str(payload.get("device") or "").strip()
+    if not dev_key:
+        raise HTTPException(status_code=400, detail="缺少 device（设备名或 IP）")
+    device = (
+        db.query(Device)
+        .filter((Device.name == dev_key) | (Device.ip == dev_key))
+        .first()
+    )
+    if device is None:
+        raise HTTPException(status_code=404, detail=f"设备不存在: {dev_key}")
+
+    # ---- 解析样本
+    raw_samples = payload.get("samples") or []
+    if not isinstance(raw_samples, list) or not raw_samples:
+        raise HTTPException(status_code=400, detail="samples 不能为空")
+
+    now = datetime.now()
+    samples = []
+    skipped = 0
+    for item in raw_samples[:500]:
+        if not isinstance(item, dict):
+            skipped += 1
+            continue
+        name = str(item.get("metric") or "").strip()
+        if not name:
+            skipped += 1
+            continue
+        value = item.get("value")
+        samples.append(
+            TelemetrySample(
+                device_id=device.id,
+                metric=name,
+                value=value,
+                interface=str(item.get("interface") or ""),
+                timestamp=now,
+                source_path=str(item.get("source_path") or "http-ingest"),
+                per_interface=bool(item.get("interface")),
+            )
+        )
+    if not samples:
+        raise HTTPException(status_code=400, detail="没有有效样本")
+
+    n = store_telemetry_samples(samples, device.id, source="http")
+    return {"ok": True, "stored": n, "skipped": skipped, "device": device.name}
 
 
 @telemetry_router.post("/simulate")

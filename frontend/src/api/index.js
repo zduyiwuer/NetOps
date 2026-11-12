@@ -86,6 +86,7 @@ export const deviceApi = {
   exportXlsx: (params) => http.get('/export/devices.xlsx', { params, responseType: 'blob' }),
   wirelessAps: (id, params) => http.get(`/devices/${id}/wireless/aps`, { params }),
   wirelessClients: (id, params) => http.get(`/devices/${id}/wireless/clients`, { params }),
+  wirelessRoaming: (id, params) => http.get(`/devices/${id}/wireless/roaming`, { params }),
 }
 
 // ---------------------------------------------------------------- 监控
@@ -239,6 +240,7 @@ export const telemetryApi = {
   updateConfig: (id, data) => http.put(`/telemetry/configs/${id}`, data),
   deleteConfig: (id) => http.delete(`/telemetry/configs/${id}`),
   samples: (params) => http.get('/telemetry/samples', { params }),
+  deleteSamples: (params) => http.delete('/telemetry/samples', { params }),
   simulate: (deviceId) => http.post(`/telemetry/simulate?device_id=${deviceId}`),
 }
 
