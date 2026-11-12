@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 
 from app.api import (
-    alerts, auth, device_access, devices, flows, logs, monitor, ops, platform, scheduler_api,
+    alerts, auth, device_access, devices, flows, logs, mibs, monitor, ops, platform, scheduler_api,
 )
 from app.core.config import settings
 from app.core.security import hash_password
@@ -177,6 +177,7 @@ app.include_router(flows.telemetry_router)
 app.include_router(device_access.router)
 app.include_router(scheduler_api.router)
 app.include_router(platform.settings_router)
+app.include_router(mibs.router)
 app.include_router(platform.topology_router)
 app.include_router(platform.audit_router)
 app.include_router(platform.ai_router)

@@ -380,6 +380,51 @@ class SystemLog(Base):
     context: Mapped[str] = mapped_column(Text, default="{}")
 
 
+class MibFile(Base):
+    """用户上传的 MIB 文件。"""
+
+    __tablename__ = "mib_files"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    # 落盘文件名（已安全化）
+    filename: Mapped[str] = mapped_column(String(200), default="")
+    # 用户上传时的原始文件名
+    original_name: Mapped[str] = mapped_column(String(200), default="")
+    size: Mapped[int] = mapped_column(Integer, default=0)
+    # MIB 模块名（如 FORTINET-MIB）
+    module_name: Mapped[str] = mapped_column(String(120), default="", index=True)
+    # 解析出的指标数量
+    node_count: Mapped[int] = mapped_column(Integer, default=0)
+    # ok / failed
+    status: Mapped[str] = mapped_column(String(16), default="ok")
+    error: Mapped[str] = mapped_column(Text, default="")
+    uploaded_by: Mapped[str] = mapped_column(String(64), default="")
+    uploaded_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
+
+
+class MibNode(Base):
+    """MIB 文件里解析出的一个指标定义。"""
+
+    __tablename__ = "mib_nodes"
+    __table_args__ = (Index("ix_mn_name", "name"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    mib_file_id: Mapped[int] = mapped_column(
+        ForeignKey("mib_files.id", ondelete="CASCADE"), index=True
+    )
+    # 指标名，如 ciscoASAConnCount
+    name: Mapped[str] = mapped_column(String(200), default="", index=True)
+    # 数字 OID，如 1.3.6.1.4.1.9.9.166.1.1.1.1.0
+    oid: Mapped[str] = mapped_column(String(200), default="", index=True)
+    # 去掉点的 OID，便于按字典序排序（父节点在前）
+    oid_tuple: Mapped[str] = mapped_column(String(200), default="")
+    # 标量 / 组 / 通知
+    type_label: Mapped[str] = mapped_column(String(32), default="")
+    syntax: Mapped[str] = mapped_column(String(120), default="")
+    access: Mapped[str] = mapped_column(String(32), default="")
+    description: Mapped[str] = mapped_column(Text, default="")
+
+
 class NotificationChannel(Base):
     """通知渠道：webhook / 邮件 / 企业微信 / 钉钉。"""
 

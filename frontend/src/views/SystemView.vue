@@ -351,6 +351,167 @@
         </div>
       </el-tab-pane>
 
+      <el-tab-pane label="MIB 文件" name="mibs">
+        <div class="table-card">
+          <div class="card-title">
+            <span>厂商 MIB 文件</span>
+            <span class="text-muted" style="font-size: 12px">
+              上传设备厂商的 MIB（.mib / .txt），平台自动解析出指标名称与 OID，
+              便于查询设备支持哪些指标、按名称反查 OID
+            </span>
+          </div>
+
+          <div class="filter-bar">
+            <el-upload
+              v-if="userStore.isAdmin"
+              :auto-upload="false"
+              :show-file-list="false"
+              accept=".mib,.txt,.my"
+              :on-change="onMibSelected"
+            >
+              <el-button type="primary" :icon="Upload" :loading="mibUploading">上传 MIB 文件</el-button>
+            </el-upload>
+            <el-input
+              v-model="mibKeyword"
+              placeholder="搜索指标名称 / OID / 描述"
+              clearable
+              size="small"
+              style="width: 280px"
+              :prefix-icon="Search"
+              @keyup.enter="searchMibNodes"
+              @clear="searchMibNodes"
+            />
+            <el-button size="small" @click="searchMibNodes">搜索指标</el-button>
+            <span class="text-muted">
+              共 {{ mibFiles.length }} 个 MIB 文件、{{ mibNodeTotal }} 个指标
+            </span>
+          </div>
+
+          <el-table v-loading="mibLoading" :data="mibFiles" size="small" stripe empty-text="尚未上传 MIB 文件">
+            <el-table-column prop="original_name" label="文件名" min-width="220" show-overflow-tooltip />
+            <el-table-column prop="module_name" label="MIB 模块" width="180">
+              <template #default="{ row }">
+                <span v-if="row.module_name" class="mono">{{ row.module_name }}</span>
+                <span v-else class="text-muted">-</span>
+              </template>
+            </el-table-column>
+            <el-table-column prop="node_count" label="指标数" width="90" align="right" />
+            <el-table-column label="大小" width="100" align="right">
+              <template #default="{ row }">{{ fmtSize(row.size) }}</template>
+            </el-table-column>
+            <el-table-column prop="uploaded_by" label="上传者" width="120" />
+            <el-table-column label="上传时间" width="160">
+              <template #default="{ row }">{{ fmtTime(row.uploaded_at) }}</template>
+            </el-table-column>
+            <el-table-column label="状态" width="90" align="center">
+              <template #default="{ row }">
+                <el-tag size="small" effect="plain" :type="row.status === 'ok' ? 'success' : 'danger'">
+                  {{ row.status === 'ok' ? '已解析' : '解析失败' }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="操作" width="80" align="center">
+              <template #default="{ row }">
+                <el-button link type="danger" size="small" @click="removeMib(row)">删除</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+        </div>
+
+        <!-- 指标检索 -->
+        <div class="table-card" style="margin-top: 12px">
+          <div class="card-title">
+            <span>指标检索</span>
+            <span class="text-muted" style="font-size: 12px">
+              按名称 / OID / 描述查找指标，确认设备支持哪些指标
+            </span>
+          </div>
+          <div class="filter-bar">
+            <el-input
+              v-model="mibKeyword"
+              placeholder="搜索指标名称 / OID / 描述"
+              clearable
+              size="small"
+              style="width: 280px"
+              :prefix-icon="Search"
+              @keyup.enter="searchMibNodes"
+              @clear="searchMibNodes"
+            />
+            <el-button size="small" @click="searchMibNodes">搜索指标</el-button>
+            <el-select
+              v-model="probeDeviceId"
+              placeholder="选择设备进行探测"
+              size="small"
+              style="width: 180px"
+            >
+              <el-option
+                v-for="d in probeDevices"
+                :key="d.id"
+                :label="d.name"
+                :value="d.id"
+              />
+            </el-select>
+            <el-button
+              size="small"
+              type="primary"
+              :icon="Connection"
+              :disabled="!probeDeviceId"
+              :loading="probing"
+              @click="probeDevice"
+            >
+              探测设备支持情况
+            </el-button>
+            <span class="text-muted">
+              用 MIB 里的指标去设备上实测，确认这台设备到底支持哪些
+            </span>
+          </div>
+
+          <el-table
+            v-if="probeResult"
+            v-loading="probing"
+            :data="probeResult.items"
+            size="small"
+            stripe
+            empty-text="没有可探测的指标"
+          >
+            <el-table-column label="支持" width="70" align="center">
+              <template #default="{ row }">
+                <el-tag size="small" effect="dark" :type="row.supported ? 'success' : 'info'">
+                  {{ row.supported ? '支持' : '不支持' }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column prop="name" label="指标名称" width="240" class-name="mono" show-overflow-tooltip />
+            <el-table-column prop="oid" label="OID" width="270" class-name="mono" show-overflow-tooltip />
+            <el-table-column label="当前值" width="160">
+              <template #default="{ row }">
+                <span v-if="row.supported" class="mono">{{ row.value }}</span>
+                <span v-else class="text-muted">-</span>
+              </template>
+            </el-table-column>
+            <el-table-column prop="description" label="说明" min-width="260" show-overflow-tooltip />
+          </el-table>
+        </div>
+
+        <!-- 指标检索结果 -->
+        <div class="table-card" style="margin-top: 12px">
+          <div class="card-title">
+            <span>已上传 MIB 的指标清单</span>
+            <span class="text-muted" style="font-size: 12px">
+              共 {{ mibNodeTotal }} 个指标
+            </span>
+          </div>
+          <el-table v-loading="mibNodeLoading" :data="mibNodes" size="small" stripe empty-text="没有匹配的指标">
+            <el-table-column prop="name" label="指标名称" width="260" class-name="mono" show-overflow-tooltip />
+            <el-table-column prop="oid" label="OID" width="270" class-name="mono" show-overflow-tooltip />
+            <el-table-column prop="type_label" label="类型" width="80" align="center" />
+            <el-table-column prop="syntax" label="类型定义" width="140" class-name="mono" show-overflow-tooltip />
+            <el-table-column prop="description" label="说明" min-width="240" show-overflow-tooltip />
+            <el-table-column prop="mib_name" label="所属 MIB" width="160" show-overflow-tooltip />
+          </el-table>
+        </div>
+      </el-tab-pane>
+
       <el-tab-pane label="AI 助手" name="ai">
         <div class="table-card">
           <div class="card-title">
@@ -585,8 +746,8 @@
 <script setup>
 import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Check, Connection, Plus, Refresh, View } from '@element-plus/icons-vue'
-import { aiApi, authApi, schedulerApi, settingsApi, systemApi } from '../api'
+import { Check, Connection, Plus, Refresh, Search, Upload, View } from '@element-plus/icons-vue'
+import { aiApi, authApi, deviceApi, mibApi, schedulerApi, settingsApi, systemApi } from '../api'
 import { useUserStore } from '../store/user'
 import { useThemeStore, THEME_OPTIONS } from '../store/theme'
 
@@ -983,6 +1144,136 @@ function onTabChange(name) {
   if (name === 'ldap') {
     testLdap()
     loadLoginLogs()
+  }
+  if (name === 'mibs') {
+    loadMibFiles()
+    searchMibNodes()
+    loadProbeDevices()
+  }
+}
+
+// ---------------------------------------------------------------- MIB 文件
+const mibFiles = ref([])
+const mibNodes = ref([])
+const mibLoading = ref(false)
+const mibNodeLoading = ref(false)
+const mibUploading = ref(false)
+const mibKeyword = ref('')
+const mibNodeTotal = ref(0)
+// 设备指标探测
+const probeDevices = ref([])
+const probeDeviceId = ref(null)
+const probeResult = ref(null)
+const probing = ref(false)
+
+function fmtSize(bytes) {
+  if (!bytes) return '0 B'
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+}
+
+async function loadMibFiles() {
+  mibLoading.value = true
+  try {
+    const res = await mibApi.list()
+    mibFiles.value = res.items || []
+  } catch (e) {
+    mibFiles.value = []
+  } finally {
+    mibLoading.value = false
+  }
+}
+
+async function loadProbeDevices() {
+  try {
+    const res = await deviceApi.list({ page_size: 200 })
+    probeDevices.value = (res.items || []).map((d) => ({
+      id: d.id, name: d.name, vendor: d.vendor,
+    }))
+  } catch (e) {
+    probeDevices.value = []
+  }
+}
+
+async function probeDevice() {
+  if (!probeDeviceId.value) return
+  probing.value = true
+  try {
+    // 探测当前清单里的指标（而不是按关键字重新筛一遍）——
+    // 用户看到什么，就探测什么
+    const ids = mibNodes.value.map((n) => n.id).filter(Boolean)
+    const res = await mibApi.probe(probeDeviceId.value, {
+      node_ids: ids.length ? ids.join(',') : undefined,
+      keyword: ids.length ? undefined : (mibKeyword.value || undefined),
+    })
+    if (res?.error) {
+      ElMessage.error(`探测失败：${res.error}`)
+      probeResult.value = null
+      return
+    }
+    probeResult.value = res
+    ElMessage.success(
+      `探测完成：${res.total} 个指标中，设备支持 ${res.supported} 个`
+    )
+  } catch (e) {
+    ElMessage.error(e?.response?.data?.detail || '探测失败')
+  } finally {
+    probing.value = false
+  }
+}
+
+async function searchMibNodes() {
+  mibNodeLoading.value = true
+  try {
+    const res = await mibApi.nodes({ keyword: mibKeyword.value || undefined })
+    mibNodes.value = res.items || []
+    mibNodeTotal.value = res.total || 0
+  } catch (e) {
+    mibNodes.value = []
+    mibNodeTotal.value = 0
+  } finally {
+    mibNodeLoading.value = false
+  }
+}
+
+async function onMibSelected(file) {
+  const raw = file.raw || file
+  if (!raw) return
+  mibUploading.value = true
+  try {
+    const res = await mibApi.upload(raw)
+    const item = res?.item || {}
+    const verb = item.replaced ? '已更新' : '解析成功'
+    ElMessage.success(
+      `MIB ${verb}：${item.module_name || item.original_name}，共 ${item.node_count} 个指标`
+    )
+    await loadMibFiles()
+    await searchMibNodes()
+  } catch (e) {
+    ElMessage.error(e?.response?.data?.detail || 'MIB 上传失败')
+  } finally {
+    mibUploading.value = false
+  }
+}
+
+async function removeMib(row) {
+  try {
+    await ElMessageBox.confirm(
+      `确定删除 MIB 文件「${row.original_name}」及其 ${row.node_count} 个指标索引吗？`,
+      '删除确认',
+      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' }
+    )
+  } catch (e) {
+    return
+  }
+  try {
+    await mibApi.remove(row.id)
+    ElMessage.success('已删除')
+    await loadMibFiles()
+    await searchMibNodes()
+  } catch (e) {
+    ElMessage.error('删除失败')
   }
 }
 

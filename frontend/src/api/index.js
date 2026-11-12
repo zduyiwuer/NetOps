@@ -154,6 +154,20 @@ export const settingsApi = {
   toggleCollector: (target, enabled) => http.post('/settings/collector/toggle', { target, enabled }),
 }
 
+export const mibApi = {
+  list: () => http.get('/mibs'),
+  nodes: (params) => http.get('/mibs/nodes', { params }),
+  resolve: (oid) => http.get('/mibs/resolve', { params: { oid } }),
+  probe: (deviceId, params = {}) =>
+    http.post(`/mibs/probe/${deviceId}`, null, { params }),
+  upload: (file) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    return http.post('/mibs/upload', fd)
+  },
+  remove: (id) => http.delete(`/mibs/${id}`),
+}
+
 export const topologyApi = {
   neighbors: (params) => http.get('/topology/neighbors', { params }),
   graph: (params) => http.get('/topology/graph', { params }),

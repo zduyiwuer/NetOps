@@ -62,7 +62,7 @@ NetFlow 会话分析、gNMI 遥测、配置备份、基线巡检与自动报告�
 | 流量分析 | 接口流量 TopN、NetFlow 会话分析、Telemetry 遥测 |
 | 运维监控 | 告警中心、配置备份、基线巡检、日志中心 |
 | 资产组织 | 门店管理、资产管理、审计日志 |
-| 系统与智能 | AI 网络助手、系统管理 |
+| 系统与智能 | AI 网络助手、系统管理（含**厂商 MIB 文件上传与指标探测**） |
 
 侧边栏顶部提供**功能搜索**（输入即过滤，无结果时显示空状态）；
 每个分组可**独立折叠/展开**，顶部还有「全部收起 / 全部展开」一键切换，
@@ -685,6 +685,12 @@ python -m scripts.verify_port_occupied_logged  # 6 项：占用端口触发回�
 
 # 24. 防火墙设备选择 + Cisco 交换机采集（需先启动后端服务）
 python -m scripts.verify_fw_select_and_cisco  # 17 项：设备选择交互、Cisco CPU/内存/接口采集、community 自动修正
+
+# 25. MIB 上传 / 解析 / 探测（需先启动后端服务）
+python -m scripts.verify_mib                # 24 项：多级索引解析、注释剔除、上传/检索/反查/删除、设备探测
+
+# 26. MIB 界面验证（需先启动后端服务）
+python -m scripts.verify_mib_ui             # 11 项：上传、检索、探测的界面交互
 ```
 
 > 容器内运行验证脚本时，需先启动服务并把 `BASE` 指向容器地址。
@@ -979,7 +985,6 @@ GET /api/monitor/devices/{device_id}/sessions # 单台设备的会话数与趋�
 ---
 
 ## 九之九之三、系统日志（平台自身的运行问题）
-
 日志中心分为两个标签页：
 
 | 标签页 | 记录什么 |
@@ -1029,6 +1034,64 @@ logger.warning(
 GET /api/logs/system                    # 查询（支持 level/category/keyword/store_id/hours）
 GET /api/logs/system/statistics         # 按级别与分类统计
 DELETE /api/logs/system/cleanup?days=30 # 清理过期日志
+```
+
+---
+
+## 九之九之四、厂商 MIB 文件上传与指标探测
+
+设备厂商的私有指标（如飞塔的 `fgSysSesCount`、思科的 `ciscoASAConnCount`）
+在不同型号 / 固件上差异很大。平台内置的厂商 OID 候补表未必覆盖某个具体设备，
+而厂商 MIB 文件由设备厂商提供。
+
+**「系统与智能 → 系统管理 → MIB 文件」** 提供了这条通路。
+
+### 能做什么
+
+| 能力 | 说明 |
+| --- | --- |
+| **上传 MIB** | 支持 `.mib` / `.txt`，平台自动解析出指标名称与 OID（同名文件视为更新，不会堆重复项） |
+| **指标检索** | 按名称 / OID / 描述查找指标，可按 MIB 文件过滤 |
+| **OID 反查** | 给一个数字 OID，查出它对应的指标名 |
+| **设备指标探测** | 选一台设备，用 MIB 里的指标去实测，**准确区分设备支持与不支持** |
+
+最后一项最有用：平台内置的 OID 取不到值时，往往是这台设备根本没开放该指标；
+上传 MIB 后一测便知，不用再靠猜。
+
+### 解析方式
+
+平台内置一个轻量的 ASN.1 OID 提取器，**不依赖联网下载标准 MIB**
+（pysmi 编译需要从网上拉 SNMPv2-SMI 等标准 MIB，企业内网常常不通）：
+
+1. 扫描文件里所有 `::= { parent index }` 形式的赋值
+2. 向上回溯找出该定义的名字与类型（`OBJECT-TYPE` / `OBJECT IDENTIFIER` / `MODULE-IDENTITY` 等）
+3. 递归展开 parent 引用，得到完整数字 OID
+
+支持的写法：
+
+| 写法 | 示例 |
+| --- | --- |
+| 单级索引 | `::= { fgSystem 1 }` |
+| 多级索引（点分隔） | `::= { fgSysMem 1.3 }` |
+| 多级索引（空格分隔） | `::= { mib-2 1 3 }` |
+
+标准根 OID（`enterprises` / `private` / `mgmt` / `mib-2` / 各厂商根）内置一份，
+文件内自定义的定义**优先于**内置同名项。
+
+### 探测的实现细节
+
+- 标量指标的**实例** OID 是定义 OID 加 `.0`（SNMP 约定），
+  探测时自动补全
+- 一次 GET 批量请求所有候选 OID，能取到值的就是设备支持的
+- 只探测标量型指标（表格节点的 OID 是表头，探测无意义）
+
+```http
+GET  /api/mibs                          # MIB 文件列表
+POST /api/mibs/upload                   # 上传（multipart/form-data）
+DELETE /api/mibs/{id}                   # 删除
+GET  /api/mibs/nodes?keyword=           # 指标检索
+GET  /api/mibs/resolve?oid=             # OID 反查
+POST /api/mibs/probe/{device_id}        # 设备指标探测
 ```
 
 ---
