@@ -658,6 +658,7 @@ def list_wireless_aps(
                 "state": r.state,
                 "channels": r.channels,
                 "client_count": client_counts.get(r.radio_mac, 0),
+                "noise_floor": r.noise_floor,
                 "source": r.source or "snmp",
                 "ts": r.ts.isoformat() if r.ts else "",
             }

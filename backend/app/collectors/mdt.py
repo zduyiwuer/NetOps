@@ -77,6 +77,19 @@ def parse_telemetry_msg(raw: bytes) -> Optional[mdt_pb2.Telemetry]:
         return None
 
 
+def _norm_mac(v: Any) -> str:
+    """MAC 统一为 xx:xx:xx:xx:xx:xx 小写格式。
+
+    设备可能推 aabb.ccdd.eeff / AA-BB-CC-DD-EE-FF / AABBCCDDEEFF
+    等形式，归一化后才能做表间关联（bssid 关联 AP 表）。
+    """
+    s = str(v).strip().lower()
+    s = s.replace(":", "").replace("-", "").replace(".", "").replace(" ", "")
+    if len(s) == 12 and all(ch in "0123456789abcdef" for ch in s):
+        return ":".join(s[i : i + 2] for i in range(0, 12, 2))
+    return str(v)  # 非标准形式原样返回
+
+
 def telemetry_to_samples(msg: mdt_pb2.Telemetry) -> List[Dict[str, Any]]:
     """把 Telemetry 消息转成归一化样本列表。
 
@@ -540,7 +553,11 @@ def update_wireless_from_msg(msg: mdt_pb2.Telemetry, device_id) -> int:
         names = [f.name for f in field.fields]
         for name in set(names):
             group = [f for f in field.fields if f.name == name]
-            if len(group) >= 2 and all(g.fields for g in group):
+            # ≥2 个同名兄弟才算列表；只有 1 个时也要（设备上只有
+            # 1 个客户端的场景），但要排除 keys 这类单例键容器
+            if len(group) >= 1 and all(g.fields for g in group) and name not in (
+                "keys", "content", "oper-data", "capwap-data",
+            ):
                 groups.append(group)
         # 深一层找（keys / content 等单例容器要穿透）
         for f in field.fields:
@@ -573,6 +590,12 @@ def update_wireless_from_msg(msg: mdt_pb2.Telemetry, device_id) -> int:
                 if k.endswith("ap-name") and isinstance(v, str) and v:
                     ap_name = v
                     break
+            if not ap_name:
+                # rrm 树（ap-auto-rf-dot11-data）没有 ap-name——
+                # 用 wtp-mac 定位（稍后按 radio_mac 关联 AP 行）
+                wtp = leaves.get("wtp-mac") or leaves.get("wtp-mac-addr")
+                if wtp:
+                    ap_name = f"__mac__{_norm_mac(wtp)}"
             if ap_name:
                 if len(ap_updates) == 0:
                     # 首个 AP 条目的字段名（诊断键名映射用）
@@ -605,14 +628,27 @@ def update_wireless_from_msg(msg: mdt_pb2.Telemetry, device_id) -> int:
                 .filter(WirelessAP.device_id == device_id)
                 .all()
             }
+            # radio_mac 索引（rrm 条目按 wtp-mac 关联用）
+            aps_by_mac = {
+                _norm_mac(a.radio_mac): a
+                for a in aps.values()
+                if a.radio_mac
+            }
             for ap_name, leaves in ap_updates[:200]:
-                ap_row = aps.get(ap_name)
-                if ap_row is None:
-                    ap_row = WirelessAP(
-                        device_id=device_id, name=ap_name, ts=now
-                    )
-                    aps[ap_name] = ap_row
-                    db.add(ap_row)
+                if ap_name.startswith("__mac__"):
+                    # rrm 条目：按 radio_mac 找已有 AP 行；找不到跳过
+                    # （噪底等 RF 数据挂到 AP 行上，不新建无名字的行）
+                    ap_row = aps_by_mac.get(ap_name[len("__mac__"):])
+                    if ap_row is None:
+                        continue
+                else:
+                    ap_row = aps.get(ap_name)
+                    if ap_row is None:
+                        ap_row = WirelessAP(
+                            device_id=device_id, name=ap_name, ts=now
+                        )
+                        aps[ap_name] = ap_row
+                        db.add(ap_row)
                 # 键名按常见 YANG 宽松匹配（设备版本差异容忍）
                 # 键名按 9800L 实测报文（16:15 批 dump）：
                 # mac-addr / wtp-mac-addr / ip-address.ip-address-value
@@ -638,6 +674,16 @@ def update_wireless_from_msg(msg: mdt_pb2.Telemetry, device_id) -> int:
                                 break
                     if v is not None and v != getattr(ap_row, col):
                         setattr(ap_row, col, conv(v))
+                # rrm 的噪底（noise-floor 键，dBm）——订阅数据里
+                # 有该字段时自动填充 AP 行
+                for nk in ("noise-floor", "oper-data.noise-floor"):
+                    v = leaves.get(nk)
+                    if v is not None:
+                        try:
+                            ap_row.noise_floor = int(v)
+                        except (ValueError, TypeError):
+                            pass
+                        break
                 ap_row.source = "telemetry"
                 ap_row.ts = now
                 touched += 1
@@ -672,24 +718,37 @@ def update_wireless_from_msg(msg: mdt_pb2.Telemetry, device_id) -> int:
                         c.signal_strength = int(rssi)
                         changed = True
             else:
-                ap = leaves.get("ap-name")
-                if isinstance(ap, str) and ap and ap != c.ap_name:
-                    c.ap_name = ap
-                    changed = True
-                slot = leaves.get("ms-ap-slot-id")
-                if isinstance(slot, (int, float)) and int(slot) != c.slot:
-                    c.slot = int(slot)
-                    changed = True
-                # 状态 / 协议（co-state 如 associated，client-type
-                # 如 dot11-client-normal）→ 状态列
-                state = (
-                    leaves.get("co-state")
-                    or leaves.get("client-type")
-                    or ""
-                )
-                if isinstance(state, str) and state and state != c.state:
-                    c.state = state
-                    changed = True
+                # 客户端条目字段全量映射（9800L 实测键名）——
+                # 遥测优先填满详情页的客户端信息
+                for lk, attr, conv in (
+                    ("ap-name", "ap_name", str),
+                    ("ms-ap-slot-id", "slot", int),
+                    ("co-state", "state", str),
+                    ("dot11-state", "state", str),
+                    ("username", "username", str),
+                    ("ms-mac-address", "bssid", _norm_mac),
+                    ("ms-bssid", "bssid", _norm_mac),
+                    ("bssid", "bssid", _norm_mac),
+                    ("ssid", "ssid", str),
+                    ("vap-ssid", "ssid", str),
+                    ("ap-mac-address", "bssid", _norm_mac),
+                ):
+                    v = leaves.get(lk)
+                    if v is None:
+                        continue
+                    try:
+                        v = conv(v) if conv is not str else str(v)
+                    except (ValueError, TypeError):
+                        continue
+                    if v in (None, ""):
+                        continue
+                    # state 允许多个来源键先后覆盖（后面的键
+                    # dot11-state 比 co-state 更详细）
+                    if v != getattr(c, attr):
+                        setattr(c, attr, v)
+                        changed = True
+                # 信道：客户端条目不含信道（由 AP radio 决定），
+                # wlan-id / vlan 类数值字段暂无展示列，忽略
             # 遥测来源：SNMP 轮询不再覆盖此行的遥测字段
             c.source = "telemetry"
             if changed:

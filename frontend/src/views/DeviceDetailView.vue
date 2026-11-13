@@ -282,6 +282,16 @@
               <span v-else class="text-muted">-</span>
             </template>
           </el-table-column>
+          <el-table-column label="噪底" width="80" align="center">
+            <template #default="{ row }">
+              <span class="mono">{{ row.noise_floor != null ? row.noise_floor + ' dBm' : '-' }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="噪底" width="80" align="center">
+            <template #default="{ row }">
+              <span class="mono">{{ row.noise_floor != null ? row.noise_floor + ' dBm' : '-' }}</span>
+            </template>
+          </el-table-column>
           <el-table-column prop="radio_mac" label="Radio MAC" width="135" class-name="mono" show-overflow-tooltip />
           <el-table-column prop="serial_number" label="序列号" width="130" class-name="mono" show-overflow-tooltip />
           <el-table-column prop="location" label="位置" min-width="120" show-overflow-tooltip />

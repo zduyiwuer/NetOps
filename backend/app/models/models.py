@@ -476,6 +476,8 @@ class WirelessAP(Base):
     # 数据来源：telemetry（遥测推送，优先）/ snmp（轮询）——
     # 遥测来源的行不会被 SNMP 轮询的整体替换清掉
     source: Mapped[str] = mapped_column(String(16), default="snmp")
+    # 噪底（dBm）——由 rrm-oper 遥测推送填充
+    noise_floor: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     ts: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
 
 
