@@ -95,6 +95,12 @@
         </el-table-column>
         <el-table-column prop="model" label="型号" width="130" show-overflow-tooltip />
         <el-table-column prop="store_name" label="门店" width="110" show-overflow-tooltip />
+        <el-table-column prop="location" label="位置" min-width="110" show-overflow-tooltip />
+        <el-table-column prop="asset_tag" label="资产编号" min-width="110" class-name="mono" show-overflow-tooltip />
+        <el-table-column prop="serial_number" label="序列号" min-width="130" class-name="mono" show-overflow-tooltip />
+        <el-table-column label="设备类型" width="100" show-overflow-tooltip>
+          <template #default="{ row }">{{ deviceTypeText(row.device_type) }}</template>
+        </el-table-column>
         <el-table-column label="采集通道" width="140">
           <template #default="{ row }">
             <el-tag v-if="row.use_snmp" size="small" effect="plain" style="margin: 1px">SNMP</el-tag>

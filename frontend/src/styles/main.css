@@ -217,3 +217,29 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: #94a3b8;
 }
+
+/* ---------------------------------------------------------------- 表格列宽
+中间列可以拖拽调宽；首列与末列固定不动（隐藏拖拽手柄）。
+border 模式下 element-plus 会在表头列分界处渲染 caret-wrapper，
+把它藏掉该列就无法拖动。末列定位用 :nth-last-child(2)——
+border 模式表头行末尾还有一个 gutter 占位列。
+*/
+.el-table--border .el-table__header-wrapper th:first-child .caret-wrapper,
+.el-table--border .el-table__header-wrapper th:nth-last-child(2) .caret-wrapper,
+.el-table--border .el-table__fixed-header-wrapper th:first-child .caret-wrapper,
+.el-table--border .el-table__fixed-header-wrapper th:last-child .caret-wrapper {
+  display: none !important;
+}
+
+/* ---------------------------------------------------------------- 表格列宽
+中间列可以拖拽调宽；首列与末列固定不动（隐藏拖拽手柄）。
+border 模式下 element-plus 会在表头列分界处渲染 caret-wrapper，
+把它藏掉该列就无法拖动。末列定位用 :nth-last-child(2)——
+border 模式表头行末尾还有一个 gutter 占位列。
+*/
+.el-table--border .el-table__header-wrapper th:first-child .caret-wrapper,
+.el-table--border .el-table__header-wrapper th:nth-last-child(2) .caret-wrapper,
+.el-table--border .el-table__fixed-header-wrapper th:first-child .caret-wrapper,
+.el-table--border .el-table__fixed-header-wrapper th:last-child .caret-wrapper {
+  display: none !important;
+}

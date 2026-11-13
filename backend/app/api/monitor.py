@@ -253,7 +253,6 @@ def interfaces_realtime(
             "in_errors": r.in_errors,
             "out_errors": r.out_errors,
             "utilization": r.utilization,
-            "mac_count": mac_counts.get(r.if_index, 0),
             "ts": r.ts.isoformat(),
         })
 

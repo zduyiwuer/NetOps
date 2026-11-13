@@ -184,6 +184,8 @@ class MdtDialoutServicer(mdt_pb2_grpc.gRPCMdtDialoutServicer):
         # 用完整 peer（含源端口）做 key：同一设备的多条订阅 RPC
         # （每订阅一条流）用 IP 做主键会互相覆盖
         self.sessions[peer or "unknown"] = session
+        # peer 形如 "ipv4:172.30.132.2:60389"——解析出 IP 供设备匹配
+        ip = peer.split(":")[1] if ":" in peer else peer
         # 清理已断开超过 10 分钟的旧会话记录
         now = datetime.now()
         stale = [
