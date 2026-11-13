@@ -49,6 +49,8 @@ SETTING_TYPES: Dict[str, str] = {
     "collector.netflow_enabled": "bool",
     "collector.syslog_enabled": "bool",
     "collector.gnmi_port": "int",
+    "collector.mdt_port": "int",
+    "collector.ssh_metrics_enabled": "bool",
     "collector.netflow_ports": "str",
     # AAA（TACACS+/RADIUS）
     "aaa.enabled": "bool",
@@ -122,7 +124,12 @@ def get_all(db: Session, include_secrets: bool = False) -> Dict[str, Any]:
 
 
 def update_many(db: Session, payload: Dict[str, Any]) -> List[str]:
-    """批量更新设置项，返回实际变更的 key 列表。"""
+    """批量更新设置项，返回实际变更的 key 列表。
+
+    前端会把整个设置表单 PUT 回来（包括没改过的项）——
+    这里对比旧值，只有真正变化的才算 changed，
+    避免每次保存设置都触发所有采集器重启。
+    """
     changed: List[str] = []
     for key, value in (payload or {}).items():
         if key not in SETTING_TYPES:
@@ -130,9 +137,26 @@ def update_many(db: Session, payload: Dict[str, Any]) -> List[str]:
         # 掩码值表示不修改
         if key in SECRET_KEYS and value in ("", "********"):
             continue
+        old = get(db, key)
+        if _values_equal(old, value):
+            continue
         set_value(db, key, value)
         changed.append(key)
     return changed
+
+
+def _values_equal(a: Any, b: Any) -> bool:
+    """宽松比较设置值（类型可能有 str/int/bool 的表示差异）。"""
+    if a is None and b in ("", None):
+        return True
+    try:
+        if isinstance(a, bool) or isinstance(b, bool):
+            return bool(a) == bool(b)
+        if isinstance(a, (int, float)) or isinstance(b, (int, float)):
+            return float(a) == float(b)
+    except (TypeError, ValueError):
+        pass
+    return str(a) == str(b)
 
 
 def explicit_keys(db: Session) -> List[str]:
@@ -177,6 +201,10 @@ def effective_settings(db: Optional[Session] = None) -> Dict[str, Any]:
             "collector.netflow_enabled": env.netflow_enabled,
             "collector.syslog_enabled": env.syslog_enabled,
             "collector.gnmi_port": env.gnmi_listen_port,
+            "collector.mdt_port": 57000,
+            # 监控指标的 SSH 兜底默认关——统一走 SNMP / 遥测，
+            # 无法采集的显示为空（WLC 内存等指标需要显式打开才有）
+            "collector.ssh_metrics_enabled": False,
             "collector.netflow_ports": ",".join(str(p) for p in env.netflow_udp_ports),
             "aaa.enabled": False,
             "aaa.tacacs_secret": "",

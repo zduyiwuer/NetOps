@@ -12,6 +12,8 @@ import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
+import grpc
+
 from sqlalchemy.orm import Session
 
 from app.collectors.engine import rate_tracker
@@ -23,6 +25,7 @@ from app.collectors.telemetry import (
     TelemetryPathMapper,
     TelemetrySample,
 )
+from app.collectors.mdt import MdtCollectorServer
 from app.db.session import SessionLocal
 from app.models.models import (
     Device,
@@ -40,7 +43,26 @@ _if_index_cache: Dict[Tuple[int, str], int] = {}
 
 # 运行时状态
 collector_server: Optional[TelemetryCollectorServer] = None
+mdt_server: Optional[Any] = None  # Cisco MDT 专用服务器（57000 端口）
 client_sessions: Dict[int, TelemetryClientSession] = {}
+
+
+def _settings_get(key: str, default: Any) -> Any:
+    """轻量读系统设置（无 db 会话时直接给默认值，避免循环依赖）。"""
+    try:
+        from app.services import settings_service
+
+        db = SessionLocal()
+        try:
+            return settings_service.get(db, key, default)
+        finally:
+            db.close()
+    except Exception:
+        return default
+
+
+def settings_get(key: str, default: Any) -> Any:
+    return _settings_get(key, default)
 
 
 # ---------------------------------------------------------------- 归一化
@@ -317,16 +339,20 @@ def _port_bindable(port: int, host: str = "0.0.0.0") -> bool:
         sock.close()
 
 
-def resolve_gnmi_port(preferred: int, search_span: int = 200) -> tuple[int, bool]:
+def resolve_gnmi_port(preferred: int, search_span: int = 200, auto_fallback: bool = True) -> tuple[int, bool]:
     """解析实际可用的 gNMI 监听端口，返回 (端口, 是否发生回退)。
 
-    优先使用配置的标准端口 57400；若被系统排除或被其它进程占用，
-    则在邻近范围里找一个可用端口，保证「关掉后还能重新打开」。
-
-    回退后设备若采用 dial-out（主动推送到平台），
-    需要把设备侧的 target 端口改成实际端口——该端口会写入状态接口展示。
+    - auto_fallback=True（默认端口未显式配置时）：
+      优先使用 57400；若被系统排除或被其它进程占用，
+      在邻近范围找一个可用端口，保证服务能起来。
+    - auto_fallback=False（用户在系统设置里显式配置了端口时）：
+      **不自动回退**——用户配置的端口绑定失败就让启动失败，
+      并写系统日志说明原因。否则用户会以为在监听自己设的端口，
+      实际平台偷偷换了一个，设备怎么推都推不上来。
     """
     if _port_bindable(preferred):
+        return preferred, False
+    if not auto_fallback:
         return preferred, False
     # 先往下找，再往上找（优先靠近标准端口）
     for offset in range(1, search_span + 1):
@@ -353,8 +379,19 @@ async def start_telemetry_services(gnmi_port: int = 57400) -> bool:
     finally:
         db.close()
 
-    # 端口可用性预检：标准端口可能被 Windows 排除范围占用而无法绑定
-    actual_port, fallback = resolve_gnmi_port(gnmi_port)
+    # 端口可用性预检：标准端口可能被 Windows 排除范围占用而无法绑定。
+    # 用户在系统设置里显式配置的端口**不自动回退**——绑定失败就明确报错，
+    # 避免「以为在监听自己设的端口，实际平台偷偷换了一个」
+    from app.services.settings_service import explicit_keys
+
+    db_probe = SessionLocal()
+    try:
+        user_set = "collector.gnmi_port" in explicit_keys(db_probe)
+    finally:
+        db_probe.close()
+    actual_port, fallback = resolve_gnmi_port(
+        gnmi_port, auto_fallback=not user_set
+    )
     if fallback:
         # 只发一条日志：系统日志服务会自动捕获 warning 级日志，
         # extra 里的结构化上下文会一并落到系统日志的 context 字段
@@ -385,6 +422,38 @@ async def start_telemetry_services(gnmi_port: int = 57400) -> bool:
             },
         )
         return False
+
+    # ---------------------------------------------------------------- Cisco MDT
+    # 传统 MDT 的常见端口是 57000（gNMI 是 57400）——两个端口都监听，
+    # 设备配置哪个都能通。57400 已由上面的 collector 覆盖
+    # （MDT 与 gNMI 注册在同一服务器上），这里再起一个 MDT 专用服务器。
+    global mdt_server
+    db_probe2 = SessionLocal()
+    try:
+        mdt_user_set = "collector.mdt_port" in explicit_keys(db_probe2)
+    finally:
+        db_probe2.close()
+    mdt_port = int(_settings_get("collector.mdt_port", 57000) or 57000)
+    mdt_port, mdt_fallback = resolve_gnmi_port(
+        mdt_port, auto_fallback=not mdt_user_set
+    )
+    if mdt_port != collector_server.port:  # 与 gNMI 端口相同时不重复监听
+        mdt_server = MdtCollectorServer(on_samples, resolve_device_by_peer)
+        if await mdt_server.start(mdt_port):
+            if mdt_fallback:
+                logger.warning(
+                    "Cisco MDT 端口 57000 不可用，改用 %s。"
+                    "设备侧 receiver 端口需改为 %s", mdt_port, mdt_port,
+                )
+        else:
+            mdt_server = None
+            if mdt_user_set:
+                logger.warning(
+                    "Cisco MDT 端口 %s（用户配置）绑定失败——不自动回退。"
+                    "请检查端口是否被占用或落在系统排除范围", mdt_port,
+                )
+    else:
+        mdt_server = None
 
     # 启动 client 模式会话
     db = SessionLocal()
@@ -421,6 +490,14 @@ async def start_telemetry_services(gnmi_port: int = 57400) -> bool:
 
 
 async def stop_telemetry_services() -> None:
+    global mdt_server
+    if mdt_server is not None:
+        try:
+            await mdt_server.stop()
+        except Exception:
+            pass
+        mdt_server = None
+
     global collector_server
     for session in list(client_sessions.values()):
         await session.stop()
@@ -459,11 +536,12 @@ def telemetry_status() -> Dict[str, Any]:
     return {
         "collector_running": collector_server is not None,
         "collector_port": collector_server.port if collector_server else None,
-        # 实际端口与标准端口不一致时，说明发生了回退——
-        # 设备采用 dial-out 推送时必须用这个端口
+        # 只在「实际端口 ≠ 用户配置的端口」时才标回退——
+        # 用户显式改过端口且按用户端口在监听，不算回退
         "collector_port_fallback": (
-            collector_server.port != DEFAULT_GNMI_PORT
+            collector_server.port != int(cfg_port)
             if collector_server and collector_server.port
+            and (cfg_port := _settings_get("collector.gnmi_port", DEFAULT_GNMI_PORT))
             else False
         ),
         "sessions": sessions,

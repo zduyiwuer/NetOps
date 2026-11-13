@@ -154,7 +154,7 @@ def main() -> int:
         check(f"OID 正确：{name}", bool(node) and node["name"] == name,
               f"{oid} -> {node['name'] if node else '未找到'}")
 
-    nodes = mib_service.search_nodes("", limit=200)
+    nodes, total = mib_service.search_nodes("", limit=200)
     check("注释里的定义被剔除", not any(n["name"] == "fgCommentedOut" for n in nodes))
     check("指标带描述", any(n["description"] for n in nodes))
     check("指标带类型定义", any(n["syntax"] for n in nodes))

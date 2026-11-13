@@ -335,7 +335,21 @@
             <el-form-item label="gNMI 监听端口">
               <el-input-number v-model="settingsForm['collector.gnmi_port']" :min="1024" :max="65535" />
               <span class="text-muted" style="margin-left: 10px; font-size: 12px">
-                修改后需重启 gNMI Collector 生效（关闭再开启）
+                设备 gNMI dial-out 推送的端口；显式设置后绑定失败不再自动换端口
+              </span>
+            </el-form-item>
+            <el-form-item label="SSH 指标兜底">
+              <el-switch v-model="settingsForm['collector.ssh_metrics_enabled']" />
+              <span class="text-muted" style="margin-left: 10px; font-size: 12px">
+                默认关闭：监控数据统一走 SNMP / 遥测，取不到显示为空。
+                开启后 SNMP 失败时用 CLI 兜底（部分指标如 WLC 内存只有 CLI 准）
+              </span>
+            </el-form-item>
+            <el-form-item label="Cisco MDT 端口">
+              <el-input-number v-model="settingsForm['collector.mdt_port']" :min="1024" :max="65535" />
+              <span class="text-muted" style="margin-left: 10px; font-size: 12px">
+                Cisco MDT dial-out 的端口（telemetry ietf subscription ... protocol
+                grpc-tcp 的 receiver 端口，默认 57000）
               </span>
             </el-form-item>
             <el-form-item label="NetFlow 监听端口">
@@ -378,8 +392,8 @@
               size="small"
               style="width: 280px"
               :prefix-icon="Search"
-              @keyup.enter="searchMibNodes"
-              @clear="searchMibNodes"
+              @keyup.enter="searchMibNodesFromStart"
+              @clear="searchMibNodesFromStart"
             />
             <el-button size="small" @click="searchMibNodes">搜索指标</el-button>
             <span class="text-muted">
@@ -434,8 +448,8 @@
               size="small"
               style="width: 280px"
               :prefix-icon="Search"
-              @keyup.enter="searchMibNodes"
-              @clear="searchMibNodes"
+              @keyup.enter="searchMibNodesFromStart"
+              @clear="searchMibNodesFromStart"
             />
             <el-button size="small" @click="searchMibNodes">搜索指标</el-button>
             <el-select
@@ -498,7 +512,7 @@
           <div class="card-title">
             <span>已上传 MIB 的指标清单</span>
             <span class="text-muted" style="font-size: 12px">
-              共 {{ mibNodeTotal }} 个指标
+              共 {{ mibNodeTotal }} 个指标（分页展示）
             </span>
           </div>
           <el-table v-loading="mibNodeLoading" :data="mibNodes" size="small" stripe empty-text="没有匹配的指标">
@@ -509,6 +523,17 @@
             <el-table-column prop="description" label="说明" min-width="240" show-overflow-tooltip />
             <el-table-column prop="mib_name" label="所属 MIB" width="160" show-overflow-tooltip />
           </el-table>
+          <div style="display: flex; justify-content: flex-end; padding: 8px 4px 2px">
+            <el-pagination
+              v-model:current-page="mibNodePage"
+              :page-size="mibNodePageSize"
+              :total="mibNodeTotal"
+              layout="total, prev, pager, next"
+              background
+              small
+              @current-change="searchMibNodes"
+            />
+          </div>
         </div>
       </el-tab-pane>
 
@@ -1155,6 +1180,8 @@ function onTabChange(name) {
 // ---------------------------------------------------------------- MIB 文件
 const mibFiles = ref([])
 const mibNodes = ref([])
+const mibNodePage = ref(1)
+const mibNodePageSize = 200
 const mibLoading = ref(false)
 const mibNodeLoading = ref(false)
 const mibUploading = ref(false)
@@ -1223,10 +1250,19 @@ async function probeDevice() {
   }
 }
 
+async function searchMibNodesFromStart() {
+  mibNodePage.value = 1
+  await searchMibNodes()
+}
+
 async function searchMibNodes() {
   mibNodeLoading.value = true
   try {
-    const res = await mibApi.nodes({ keyword: mibKeyword.value || undefined })
+    const res = await mibApi.nodes({
+      keyword: mibKeyword.value || undefined,
+      limit: mibNodePageSize,
+      offset: (mibNodePage.value - 1) * mibNodePageSize,
+    })
     mibNodes.value = res.items || []
     mibNodeTotal.value = res.total || 0
   } catch (e) {

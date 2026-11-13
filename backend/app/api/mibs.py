@@ -75,11 +75,12 @@ def list_nodes(
     keyword: str = Query("", description="按名称 / OID / 描述搜索"),
     mib_file_id: Optional[int] = Query(None, description="限定某个 MIB 文件"),
     limit: int = Query(200, ge=1, le=2000),
+    offset: int = Query(0, ge=0, description="分页偏移"),
     _: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
-    """检索已上传 MIB 里的指标定义。"""
-    items = mib_service.search_nodes(keyword, mib_file_id, limit)
-    return {"items": items, "total": len(items)}
+    """检索已上传 MIB 里的指标定义（total 是筛选后的完整数量）。"""
+    items, total = mib_service.search_nodes(keyword, mib_file_id, limit, offset)
+    return {"items": items, "total": total}
 
 
 @router.get("/resolve")

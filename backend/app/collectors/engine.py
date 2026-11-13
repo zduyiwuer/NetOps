@@ -320,10 +320,13 @@ class Collector:
         return sample
 
     def _ssh_metrics_enabled(self) -> bool:
-        """监控指标的 SSH 兜底是否开启（系统设置，默认开）。
+        """监控指标的 SSH 兜底是否开启（系统设置，**默认关**）。
 
-        有些指标（如 WLC 的内存）SNMP 侧不可信，只有 CLI 是准的，
-        所以默认保留 SSH 兜底；需要纯 SNMP / 遥测采集时可关闭。
+        监控数据统一走 SNMP / 遥测，SSH 只用于配置备份、日志拉取
+        等非监控类操作——需要兜底时在系统设置
+        collector.ssh_metrics_enabled=true 显式打开。
+        注意：部分指标（如 WLC 的内存）SNMP 侧不可信只有 CLI 准，
+        关闭兜底后这些指标会显示为空。
         """
         try:
             from app.db.session import SessionLocal
@@ -333,13 +336,13 @@ class Collector:
             try:
                 return bool(
                     settings_service.get(
-                        db, "collector.ssh_metrics_enabled", True
+                        db, "collector.ssh_metrics_enabled", False
                     )
                 )
             finally:
                 db.close()
         except Exception:
-            return True
+            return False
 
     def _fresh_telemetry_metrics(self) -> set:
         """最近 5 分钟内该设备有哪些遥测指标。

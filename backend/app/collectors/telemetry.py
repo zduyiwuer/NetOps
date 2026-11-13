@@ -605,6 +605,29 @@ class TelemetryCollectorServer:
         self.servicer = GnmiServicer(on_samples, device_resolver, mapper)
         self._server: Optional[grpc.aio.Server] = None
         self.port = DEFAULT_GNMI_PORT
+        # Cisco MDT dial-out（与 gNMI 共端口，start() 时注册）
+        self.mdt: Optional[Any] = None
+        self._on_samples = on_samples
+        self._device_resolver = device_resolver
+
+    def _mdt_on_samples(self, samples: List[Dict[str, Any]], device_id: Optional[int]) -> None:
+        """MDT 样本转成 TelemetrySample 后走与 gNMI 相同的入库管线。
+
+        MDT 样本是纯 dict（metric / value / interface / source_path / ts），
+        与 gNMI 的差别只是编码层——归一化后完全一致。
+        """
+        ts_samples = [
+            TelemetrySample(
+                device_id=device_id,
+                metric=str(s.get("metric") or ""),
+                value=s.get("value"),
+                interface=str(s.get("interface") or ""),
+                timestamp=s.get("ts") or datetime.now(),
+                source_path=str(s.get("source_path") or ""),
+            )
+            for s in samples
+        ]
+        self._on_samples(ts_samples, device_id)
 
     async def start(self, port: int = DEFAULT_GNMI_PORT) -> bool:
         self.port = port
@@ -617,13 +640,24 @@ class TelemetryCollectorServer:
                 ("grpc.so_reuseport", 1),
             ])
             gnmi_pb2_grpc.add_gNMIServicer_to_server(self.servicer, server)
+            # Cisco MDT dial-out（telemetry ietf subscription ... protocol grpc-tcp）
+            # 与 gNMI 注册在同一个端口：gRPC 支持同端口多服务，
+            # 设备按自己支持的方式二选一连接
+            from app.collectors.mdt import MdtCollector
+
+            self.mdt = MdtCollector(
+                on_samples=self._mdt_on_samples,
+                device_resolver=self._device_resolver,
+                debug_dump=False,
+            )
+            self.mdt.attach(server)
             bound = server.add_insecure_port(f"0.0.0.0:{port}")
             if not bound:
                 logger.warning("gNMI 端口 %s 绑定失败（可能已被占用）", port)
                 return False
             await server.start()
             self._server = server
-            logger.info("gNMI Collector 监听 0.0.0.0:%s", port)
+            logger.info("gNMI Collector 监听 0.0.0.0:%s（含 Cisco MDT dial-out）", port)
             return True
         except Exception as exc:
             logger.warning("gNMI Collector 启动失败: %s", exc)

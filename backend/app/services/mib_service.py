@@ -402,8 +402,14 @@ def search_nodes(
     keyword: str = "",
     mib_file_id: Optional[int] = None,
     limit: int = 200,
-) -> List[Dict[str, Any]]:
-    """按关键字搜索指标（名称 / OID / 描述）。"""
+    offset: int = 0,
+) -> Tuple[List[Dict[str, Any]], int]:
+    """按关键字搜索指标（名称 / OID / 描述），返回 (items, 总数)。
+
+    总数是筛选后的完整数量（不受 limit 截断）——
+    一个 MIB 可能有上千个指标，前端要靠 total 分页展示，
+    否则用户会以为只导入了一部分。
+    """
     db = SessionLocal()
     try:
         q = db.query(MibNode)
@@ -416,12 +422,18 @@ def search_nodes(
                 | (MibNode.oid.like(like))
                 | (MibNode.description.like(like))
             )
-        rows = q.order_by(MibNode.oid_tuple).limit(limit).all()
+        total = q.count()
+        rows = (
+            q.order_by(MibNode.oid_tuple)
+            .offset(offset)
+            .limit(limit)
+            .all()
+        )
         names = {r.mib_file_id for r in rows}
         files = {f.id: f.original_name for f in db.query(MibFile).filter(
             MibFile.id.in_(names)
         ).all()} if names else {}
-        return [
+        items = [
             {
                 "id": r.id,
                 "name": r.name,
@@ -435,6 +447,7 @@ def search_nodes(
             }
             for r in rows
         ]
+        return items, total
     finally:
         db.close()
 

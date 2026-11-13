@@ -225,22 +225,27 @@ async def apply_switches(changes: Dict[str, Any]) -> Dict[str, Any]:
         result["collector.snmp_enabled"] = ok
 
     # Telemetry / gNMI
-    if "collector.telemetry_enabled" in changes:
+    # 注意顺序：端口变更必须先于开关判断——
+    # 若 telemetry_enabled 与 gnmi_port 同批变化（保存全量表单时常见），
+    # 先走开关分支的话 start_gnmi 见服务已运行会直接返回，
+    # 端口变更的 elif 就永远走不到了
+    port_changed = (
+        "collector.gnmi_port" in changes or "collector.mdt_port" in changes
+    )
+    if "collector.telemetry_enabled" in changes or port_changed:
         want = bool(cfg.get("collector.telemetry_enabled"))
         if want:
-            result["collector.telemetry_enabled"] = await start_gnmi(
+            if port_changed:
+                await stop_gnmi()
+            ok = await start_gnmi(
                 int(cfg.get("collector.gnmi_port") or 57400)
             )
+            result["collector.telemetry_enabled"] = ok
+            if port_changed:
+                result["collector.gnmi_port"] = ok
+                result["collector.mdt_port"] = ok
         else:
             result["collector.telemetry_enabled"] = await stop_gnmi()
-
-    # 端口变更：若 gNMI 正在运行，需要用新端口重启才生效
-    elif "collector.gnmi_port" in changes:
-        if bool(cfg.get("collector.telemetry_enabled")):
-            await stop_gnmi()
-            result["collector.gnmi_port"] = await start_gnmi(
-                int(cfg.get("collector.gnmi_port") or 57400)
-            )
 
     # NetFlow
     if "collector.netflow_enabled" in changes:

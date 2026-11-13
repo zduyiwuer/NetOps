@@ -107,7 +107,19 @@ async def lifespan(app: FastAPI):
     if settings.netflow_enabled:
         await start_netflow(settings.netflow_udp_ports or None)
     if settings.telemetry_enabled:
-        await start_gnmi(settings.gnmi_listen_port)
+        # 优先用系统设置里的端口（用户在界面上改过就用改过的值），
+        # 避免先用默认 57400 起一遍、应用开关时再重启的闪动
+        try:
+            from app.services.settings_service import effective_settings
+
+            gnmi_port_cfg = int(
+                effective_settings().get("collector.gnmi_port")
+                or settings.gnmi_listen_port
+                or 57400
+            )
+        except Exception:
+            gnmi_port_cfg = settings.gnmi_listen_port
+        await start_gnmi(gnmi_port_cfg)
 
     # 应用数据库中保存的采集开关（覆盖环境变量默认值）
     try:
