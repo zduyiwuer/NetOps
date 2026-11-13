@@ -23,7 +23,7 @@
       <div class="stat-card">
         <div class="label"><el-icon><Coin /></el-icon>内存使用率</div>
         <div class="value" :class="memClass">{{ fmt(metric.mem_usage) }}<span class="unit">%</span></div>
-        <div class="foot">总内存 {{ fmt(metric.mem_total_mb) }} MB</div>
+        <div class="foot">{{ metric.mem_total_mb ? `总内存 ${fmt(metric.mem_total_mb)} MB` : '' }}</div>
       </div>
       <div class="stat-card">
         <div class="label"><el-icon><Odometer /></el-icon>运行时长</div>
@@ -397,6 +397,56 @@
         </el-table>
       </div>
 
+      <!-- 遥测数据（设备推送的原始样本，gNMI / Cisco MDT） -->
+      <div class="table-card" style="margin-top: 12px">
+        <div class="card-title">
+          <span>遥测数据</span>
+          <div class="iface-filter">
+            <el-select
+              v-model="telemetryPathFilter"
+              placeholder="全部订阅路径"
+              clearable
+              filterable
+              size="small"
+              style="width: 260px"
+              @change="loadTelemetrySamples"
+            >
+              <el-option v-for="p in telemetryPaths" :key="p" :label="p" :value="p" />
+            </el-select>
+            <el-button link size="small" type="primary" @click="$router.push('/telemetry')">
+              遥测分析 →
+            </el-button>
+          </div>
+        </div>
+        <el-table
+          border
+          v-loading="telemetryLoading"
+          :data="telemetrySamples"
+          size="small"
+          stripe
+          max-height="360"
+          empty-text="该设备暂无遥测样本（需设备通过 gNMI / MDT 推送）"
+        >
+          <el-table-column label="时间" width="160" class-name="mono">
+            <template #default="{ row }">{{ (row.ts || '').replace('T', ' ').slice(0, 19) }}</template>
+          </el-table-column>
+          <el-table-column prop="metric" label="指标（子项路径）" min-width="260" class-name="mono" show-overflow-tooltip />
+          <el-table-column label="值" min-width="130" show-overflow-tooltip>
+            <template #default="{ row }">
+              <span class="mono">{{ row.value_num ?? row.value_text }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column prop="interface" label="条目（客户端/接口）" width="150" class-name="mono" show-overflow-tooltip />
+          <el-table-column prop="source" label="来源" width="80" align="center">
+            <template #default="{ row }">
+              <el-tag size="small" effect="plain" :type="row.source === 'push' ? 'success' : 'info'">
+                {{ row.source }}
+              </el-tag>
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
+
       <div class="table-card" style="margin-top: 12px">
         <div class="card-title">
           <span>漫游记录</span>
@@ -466,7 +516,7 @@ import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Back, Connection, Cpu, FolderOpened, Refresh, Search, User } from '@element-plus/icons-vue'
 import BaseChart from '../components/BaseChart.vue'
-import { backupApi, deviceApi, monitorApi } from '../api'
+import { backupApi, deviceApi, monitorApi, telemetryApi } from '../api'
 import { useUserStore } from '../store/user'
 
 const route = useRoute()
@@ -564,7 +614,7 @@ async function loadMetrics() {
 async function loadAll() {
   // 先加载设备信息——会话/无线数据依赖 device.vendor 判断设备类型
   await loadDevice()
-  await Promise.all([loadInterfaces(), loadMetrics(), loadWireless(), loadRoaming()])
+  await Promise.all([loadInterfaces(), loadMetrics(), loadWireless(), loadRoaming(), loadTelemetrySamples()])
   // 接口列表就绪后再取趋势（要按流量挑接口）
   await loadIfaceHistory()
 }
@@ -820,6 +870,34 @@ async function loadWireless() {
     wirelessClients.value = []
   } finally {
     wirelessLoading.value = false
+  }
+}
+
+// ---------------------------------------------------------------- 遥测数据
+const telemetrySamples = ref([])
+const telemetryLoading = ref(false)
+const telemetryPathFilter = ref('')
+const telemetryPaths = ref([])
+
+async function loadTelemetrySamples() {
+  telemetryLoading.value = true
+  try {
+    const res = await telemetryApi.samples({
+      device_id: deviceId.value,
+      limit: 300,
+    })
+    let items = res.items || []
+    if (telemetryPathFilter.value) {
+      items = items.filter((i) => i.source_path === telemetryPathFilter.value)
+    }
+    telemetrySamples.value = items.slice(0, 100)
+    // 订阅路径下拉（去重排序）
+    telemetryPaths.value = [...new Set((res.items || []).map((i) => i.source_path).filter(Boolean))].sort()
+  } catch (e) {
+    telemetrySamples.value = []
+    telemetryPaths.value = []
+  } finally {
+    telemetryLoading.value = false
   }
 }
 
