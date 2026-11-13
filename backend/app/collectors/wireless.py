@@ -99,12 +99,15 @@ def _norm_mac(v: Any) -> str:
 
 
 def _mac_from_oid_index(parts: List[str]) -> str:
-    """把 OID 里的十进制 MAC 索引转成 hex 字符串。
+    """把 OID 里的十进制 MAC 索引转成 xx:xx:xx:xx:xx:xx。
 
     OID 索引形如 "2.167.40.154.230.115"（每字节一个十进制数）。
+    统一冒号格式——与遥测合并器一致，否则同一客户端在
+    SNMP / 遥测两条通道各建一行（key 对不上）。
     """
     try:
-        return "".join(f"{int(p):02x}" for p in parts)
+        raw = "".join(f"{int(p):02x}" for p in parts)
+        return ":".join(raw[i : i + 2] for i in range(0, len(raw), 2))
     except (ValueError, TypeError):
         return ""
 

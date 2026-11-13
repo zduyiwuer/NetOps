@@ -9,7 +9,7 @@ import asyncio
 import json
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
 import grpc
@@ -196,17 +196,44 @@ def store_telemetry_samples(
                 mem_used_mb = (mem_total - mem_free) / (1024 * 1024)
                 mem_usage = round((mem_total - mem_free) / mem_total * 100, 2)
 
-            db.add(
-                DeviceMetric(
-                    device_id=did,
-                    ts=now,
-                    cpu_usage=cpu,
-                    mem_usage=mem_usage,
-                    mem_total_mb=mem_total_mb,
-                    mem_used_mb=mem_used_mb,
-                    uptime_sec=int(_to_float(system_metrics.get("uptime")) or 0) or None,
-                    reachability=True,
+            # 遥测往往只有部分指标（如 WLC 的 sys-report 只有 CPU）——
+            # 新建一行会写「半行数据」（内存空），详情页取最新行时
+            # 把 SNMP 轮询写的完整行顶掉。改为 upsert：近 5 分钟内
+            # 已有行就更新对应字段，否则才新建。
+            recent = (
+                db.query(DeviceMetric)
+                .filter(
+                    DeviceMetric.device_id == did,
+                    DeviceMetric.ts >= now - timedelta(minutes=5),
                 )
+                .order_by(DeviceMetric.ts.desc())
+                .first()
+            )
+            if recent is not None and (
+                cpu is None or recent.reachability in (True, None)
+            ):
+                # 更新已有行（SNMP 写的完整行被遥测刷新 CPU，
+                # 内存等其他字段保留）
+                recent.ts = now
+                if cpu is not None:
+                    recent.cpu_usage = cpu
+                if mem_usage is not None:
+                    recent.mem_usage = mem_usage
+                    recent.mem_total_mb = mem_total_mb
+                    recent.mem_used_mb = mem_used_mb
+                recent.reachability = True
+            else:
+                db.add(
+                    DeviceMetric(
+                        device_id=did,
+                        ts=now,
+                        cpu_usage=cpu,
+                        mem_usage=mem_usage,
+                        mem_total_mb=mem_total_mb,
+                        mem_used_mb=mem_used_mb,
+                        uptime_sec=int(_to_float(system_metrics.get("uptime")) or 0) or None,
+                        reachability=True,
+                    )
             )
 
         # ---- 接口级指标 ----

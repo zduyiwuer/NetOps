@@ -162,15 +162,15 @@ VENDORS: Dict[str, VendorProfile] = {
             "1.3.6.1.4.1.9.9.109.1.1.1.1.4",
             f"{OID_HR_PROCESSOR_LOAD}.1",
         ],
-        mem_total_oids=[
-            "1.3.6.1.4.1.9.9.48.1.1.1.6",  # ciscoMemoryPoolFree + Used 需组合
-            "1.3.6.1.4.1.9.2.1.47",
-            OID_HR_MEMORY_SIZE,
-        ],
-        mem_used_oids=[
-            "1.3.6.1.4.1.9.9.48.1.1.1.5",
-            "1.3.6.1.4.1.9.2.1.46",
-        ],
+        # 注意：ciscoMemoryPool 的 .5(Used) / .6(Free) 是带索引的
+        # **表** OID——固定 OID 做 GET 拿到的是单侧值且语义错误
+        # （实测 WLC：GET .6 得到 Free，被当 total；used 拿不到时
+        # fallback 又把 total 赋给 used → 使用率恒 100%）。
+        # 表数据一律走下面的 walk 路径（used + free 组合）。
+        # 9.2.1.46/47（老 MIB）实测返回 **KB** 而非字节，且语义
+        # 与内存池不一致——cisco 内存一律走 walk 路径（.5+.6 组合）
+        mem_total_oids=[],
+        mem_used_oids=[],
         # CISCO-PROCESS-MIB 的 CPU 指标是带索引的表
         # (Catalyst 2960 实测在 .1.3.11 / .1.5.11，索引由实体号决定)，
         # 固定 OID 做 GET 只会拿到 No Such Instance，必须 WALK
@@ -303,16 +303,20 @@ VENDORS: Dict[str, VendorProfile] = {
             "1.3.6.1.4.1.14179.1.1.1.11.0",  # ciscoWlcSysInfoCpuUtilization
             f"{OID_HR_PROCESSOR_LOAD}.1",
         ],
-        mem_total_oids=[
-            "1.3.6.1.4.1.9.9.43.1.1.1.0",  # ciscoSysMonExtMemorySize（字节）
-            "1.3.6.1.4.1.14179.1.1.1.10.0",  # ciscoWlcSysInfoMemTotal
-            OID_HR_MEMORY_SIZE,
-        ],
-        # WLC 的 ciscoSysMonExtMemoryUsed 与 MemoryUtilization 都不可信
-        # （实测 used≈size、utilization 返回 230），因此这里**不配** mem_used_oids
-        # 与 mem_pct_oids——让内存走 SSH 的 show memory statistics（那张表是准的）。
+        # WLC 内存（9800L 实测）：ciscoSysMonExtMemoryUsed 与
+        # MemoryUtilization 不可信（used≈size、utilization 返回 230），
+        # 但 **CISCO-MEMORY-POOL-MIB 是准的**——Processor 池
+        # Used=435832944 / Free=1307850172 字节（约 25% 使用率）。
+        # GET 标量全部放弃，走 walk 组合（total = used + free）。
+        mem_total_oids=[],
         mem_used_oids=[],
         mem_pct_oids=[],
+        mem_used_walk_oids=[
+            "1.3.6.1.4.1.9.9.48.1.1.1.5",  # ciscoMemoryPoolUsed
+        ],
+        mem_free_walk_oids=[
+            "1.3.6.1.4.1.9.9.48.1.1.1.6",  # ciscoMemoryPoolFree
+        ],
         # CISCO-SYSTEM-EXT-MIB 的内存值单位是字节
         mem_total_bytes=True,
         # WLC 特有：已关联 AP 数、已关联客户端数

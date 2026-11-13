@@ -580,7 +580,10 @@ def update_wireless_from_msg(msg: mdt_pb2.Telemetry, device_id) -> int:
         mac = None
         for k, v in leaves.items():
             if ("client-mac" in k or "ms-mac" in k) and isinstance(v, str):
-                mac = v
+                # 归一化：location 订阅的 client-mac-addr 可能是
+                # 裸 12 位格式，统一成 xx:xx:xx:xx:xx:xx 才能与
+                # client-oper 订阅的行对上（否则创建重复行）
+                mac = _norm_mac(v)
                 break
         if mac:
             updates.append((mac, leaves))
@@ -653,13 +656,15 @@ def update_wireless_from_msg(msg: mdt_pb2.Telemetry, device_id) -> int:
                         db.add(ap_row)
                 # 键名按常见 YANG 宽松匹配（设备版本差异容忍）
                 # 键名按 9800L 实测报文（16:15 批 dump）：
-                # mac-addr / wtp-mac-addr / ip-address.ip-address-value
+                # mac-addr / wtp-mac-addr / cdp-cache-ap-address。
+                # 注意：ip-address.ip-address-value 实测是 **WLC
+                # 自己的管理地址**（15 个 AP 全同一个 IP 的根因），
+                # AP 的真实地址在 CDP 缓存键 cdp-cache-ap-address
                 for lk, col, conv in (
-                    ("mac-addr", "radio_mac", str),
-                    ("wtp-mac-addr", "radio_mac", str),
-                    ("wtp-mac", "radio_mac", str),
-                    ("ip-address.ip-address-value", "ip", str),
-                    ("ip-address", "ip", str),
+                    ("mac-addr", "radio_mac", _norm_mac),
+                    ("wtp-mac-addr", "radio_mac", _norm_mac),
+                    ("wtp-mac", "radio_mac", _norm_mac),
+                    ("cdp-cache-ap-address", "ip", str),
                     ("serial-number", "serial_number", str),
                     ("serial-num", "serial_number", str),
                     ("model", "model", str),
