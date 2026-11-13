@@ -235,7 +235,13 @@ def store_telemetry_samples(
             )
 
         # ---- 样本审计 ----
-        for s in samples[:200]:  # 限量存储，避免高频写入拖慢
+        # 只存数值型（趋势有意义的）样本：无线的 MDT 推送里 MAC / 认证
+        # 类型等字符串值占大头且没有趋势价值，全存会让审计表每分钟
+        # 多出上万行。数值型按批限量 200，避免高频写入拖慢。
+        numeric_samples = [
+            s for s in samples if _to_float(s.value) is not None
+        ]
+        for s in numeric_samples[:200]:
             num = _to_float(s.value)
             db.add(
                 TelemetrySampleModel(
@@ -372,6 +378,22 @@ async def start_telemetry_services(gnmi_port: int = 57400) -> bool:
     def on_samples(samples: List[TelemetrySample], device_id: Optional[int]) -> None:
         store_telemetry_samples(samples, device_id, source="push")
 
+    def on_mdt_samples(samples: List[Dict[str, Any]], device_id: Optional[int]) -> None:
+        """MDT 的样本是纯 dict（metric/value/interface/ts/source_path），
+        转成 TelemetrySample 后走与 gNMI 相同的入库管线。"""
+        ts_samples = [
+            TelemetrySample(
+                device_id=device_id,
+                metric=str(s.get("metric") or ""),
+                value=s.get("value"),
+                interface=str(s.get("interface") or ""),
+                timestamp=s.get("ts") or datetime.now(),
+                source_path=str(s.get("source_path") or ""),
+            )
+            for s in samples
+        ]
+        store_telemetry_samples(ts_samples, device_id, source="push")
+
     # 映射器：内置映射 + 用户自定义路径（collector 与 client 两种模式共用）
     db = SessionLocal()
     try:
@@ -438,7 +460,7 @@ async def start_telemetry_services(gnmi_port: int = 57400) -> bool:
         mdt_port, auto_fallback=not mdt_user_set
     )
     if mdt_port != collector_server.port:  # 与 gNMI 端口相同时不重复监听
-        mdt_server = MdtCollectorServer(on_samples, resolve_device_by_peer)
+        mdt_server = MdtCollectorServer(on_mdt_samples, resolve_device_by_peer)
         if await mdt_server.start(mdt_port):
             if mdt_fallback:
                 logger.warning(
@@ -533,6 +555,25 @@ def telemetry_status() -> Dict[str, Any]:
             "received": sess.received,
             "status": sess.status,
         })
+    # Cisco MDT dial-out 会话：57000 专用服务器 + 57400 双协议口上的
+    # MdtCollector（设备两个端口都能推，都要展示）
+    mdt_sources = []
+    if mdt_server is not None:
+        mdt_sources.append(mdt_server.status())
+    if collector_server is not None and getattr(collector_server, "mdt", None):
+        mdt_sources.append(collector_server.mdt.status())
+    for src in mdt_sources:
+        for st in src.get("sessions", []):
+            sessions.append({
+                "peer": st.get("peer"),
+                "device_id": None,
+                "mode": "mdt-push",
+                "connected_at": None,
+                "last_update": st.get("last_ts"),
+                "subscriptions": [],
+                "received": st.get("received", 0),
+                "status": st.get("status"),
+            })
     return {
         "collector_running": collector_server is not None,
         "collector_port": collector_server.port if collector_server else None,

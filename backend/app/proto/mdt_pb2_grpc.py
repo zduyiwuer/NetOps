@@ -25,10 +25,8 @@ if _version_not_supported:
     )
 
 
-class MdtDialoutStub:
+class gRPCMdtDialoutStub:
     """---------------------------------------------------------------- dial-out 通道
-    与 gNMI 不同：Cisco MDT 的 RPC 由设备发起（dial-out），
-    平台是 gRPC 服务端，接收 MdtDialoutArgs 并可回 MdtDialoutReply。
     """
 
     def __init__(self, channel):
@@ -38,16 +36,14 @@ class MdtDialoutStub:
             channel: A grpc.Channel.
         """
         self.MdtDialout = channel.stream_stream(
-                '/telemetry.MdtDialout/MdtDialout',
+                '/mdt_dialout.gRPCMdtDialout/MdtDialout',
                 request_serializer=mdt__pb2.MdtDialoutArgs.SerializeToString,
                 response_deserializer=mdt__pb2.MdtDialoutReply.FromString,
                 _registered_method=True)
 
 
-class MdtDialoutServicer:
+class gRPCMdtDialoutServicer:
     """---------------------------------------------------------------- dial-out 通道
-    与 gNMI 不同：Cisco MDT 的 RPC 由设备发起（dial-out），
-    平台是 gRPC 服务端，接收 MdtDialoutArgs 并可回 MdtDialoutReply。
     """
 
     def MdtDialout(self, request_iterator, context):
@@ -57,7 +53,7 @@ class MdtDialoutServicer:
         raise NotImplementedError('Method not implemented!')
 
 
-def add_MdtDialoutServicer_to_server(servicer, server):
+def add_gRPCMdtDialoutServicer_to_server(servicer, server):
     rpc_method_handlers = {
             'MdtDialout': grpc.stream_stream_rpc_method_handler(
                     servicer.MdtDialout,
@@ -66,16 +62,14 @@ def add_MdtDialoutServicer_to_server(servicer, server):
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
-            'telemetry.MdtDialout', rpc_method_handlers)
+            'mdt_dialout.gRPCMdtDialout', rpc_method_handlers)
     server.add_generic_rpc_handlers((generic_handler,))
-    server.add_registered_method_handlers('telemetry.MdtDialout', rpc_method_handlers)
+    server.add_registered_method_handlers('mdt_dialout.gRPCMdtDialout', rpc_method_handlers)
 
 
  # This class is part of an EXPERIMENTAL API.
-class MdtDialout:
+class gRPCMdtDialout:
     """---------------------------------------------------------------- dial-out 通道
-    与 gNMI 不同：Cisco MDT 的 RPC 由设备发起（dial-out），
-    平台是 gRPC 服务端，接收 MdtDialoutArgs 并可回 MdtDialoutReply。
     """
 
     @staticmethod
@@ -92,7 +86,7 @@ class MdtDialout:
         return grpc.experimental.stream_stream(
             request_iterator,
             target,
-            '/telemetry.MdtDialout/MdtDialout',
+            '/mdt_dialout.gRPCMdtDialout/MdtDialout',
             mdt__pb2.MdtDialoutArgs.SerializeToString,
             mdt__pb2.MdtDialoutReply.FromString,
             options,

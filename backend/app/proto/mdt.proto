@@ -1,34 +1,43 @@
 // Cisco MDT (Model-Driven Telemetry) dial-out 协议定义
 //
-// 设备侧配置（IOS XE）：
+// 设备侧配置（IOS XE，实测 Catalyst 9800L）：
 //   telemetry ietf subscription <id>
 //     encoding encode-kvgpb
 //     filter xpath /wireless-client-oper:client-oper-data
 //     stream yang-push
-//     update-policy periodic 5000
 //     receiver ip address <平台> 57000 protocol grpc-tcp
 //
-// 设备作为 gRPC 客户端主动连接平台，调用 MdtDialout 双向流，
-// 每个 MdtDialoutArgs.data 是一条 KV-GPB 编码的 Telemetry 消息。
-// 字段号与 Cisco 官方 telemetryCisco.proto / mdt_dialout.proto 一致，
-// 可直接与 IOS XE / IOS XR / NX-OS 的 dial-out 对接。
+// 服务的全方法路径（HTTP/2 :path 抓包实测）：
+//   /mdt_dialout.gRPCMdtDialout/MdtDialout
+// ——package 是 mdt_dialout、service 是 gRPCMdtDialout（不是 Cisco
+// 文档示例里的 telemetry.MdtDialout）。gRPC 方法路由是全名匹配，
+// 对不上设备会一直收到 404 然后无限重连。
+//
+// Telemetry 消息的字段号按真实报文 wire 解码实测（2026-11）：
+//   1  = node_id_str（如 "WLC"）
+//   3  = subscription_id_str（如 "3"）
+//   6  = encoding_path（如 "Cisco-IOS-XE-wireless-client-oper:client-oper-data"）
+//   8  = collection_id
+//   9  = msg_timestamp（毫秒）
+//   10 = collection_end_time（毫秒）
+//   11 = data_gpb（KV-GPB 载荷，TelemetryField）
+//   13 = 采集结束时间（毫秒）
+// TelemetryField 的 name 在字段 2（不是部分文档写的 3）。
 //
 // 由 scripts/gen_proto.py 生成 mdt_pb2.py / mdt_pb2_grpc.py。
 
 syntax = "proto3";
 
-package telemetry;
+package mdt_dialout;
 
 // ---------------------------------------------------------------- dial-out 通道
-// 与 gNMI 不同：Cisco MDT 的 RPC 由设备发起（dial-out），
-// 平台是 gRPC 服务端，接收 MdtDialoutArgs 并可回 MdtDialoutReply。
-service MdtDialout {
+service gRPCMdtDialout {
     rpc MdtDialout (stream MdtDialoutArgs) returns (stream MdtDialoutReply);
 }
 
 message MdtDialoutArgs {
     int64 ReqId = 1;       // 请求序号
-    bytes data = 2;        // KV-GPB / JSON 编码的 Telemetry 消息
+    bytes data = 2;        // KV-GPB 编码的 Telemetry 消息
     string errors = 3;     // 设备侧错误信息
     int32 type = 4;        // 1 = 数据，2 = capabilities
 }
@@ -42,51 +51,26 @@ message MdtDialoutReply {
 // ---------------------------------------------------------------- KV-GPB 载荷
 // 一条遥测消息：设备 + 订阅路径 + 采样时刻 + 数据树。
 message Telemetry {
-    uint64 collection_id = 1;             // 采集批次号（周期递增）
-    string collection_start_time = 2;     // 采集开始时间
-    uint64 msg_timestamp = 3;             // 消息时间戳（毫秒）
-    string collection_end_time = 4;       // 采集结束时间
-    bytes data_str = 5;                   // JSON 编码时的载荷
-
-    oneof subscription {
-        string subscription_id_str = 10;  // 订阅标识（字符串形式）
-        uint64 subscription_id = 11;      // 订阅标识（数字形式）
-    }
-
-    oneof node_id {
-        string node_id_str = 14;          // 设备标识（通常为设备名或管理 IP）
-        bytes node_id_bytes = 15;
-    }
-
-    string software_version = 20;         // 设备软件版本
-
-    string sensor_path = 23;              // 传感器路径（旧式 MDT）
-
-    // yang-push 的订阅路径，如 wireless-client-oper:client-oper-data
-    string encoding_path = 33;
-
-    // KV-GPB 载荷（encode-kvgpb 时）
-    TelemetryField data_gpb = 36;
-
-    // 采样周期（毫秒）
-    uint64 collection_interval = 37;
-
-    oneof model_version {
-        string model_version_str = 41;
-    }
+    string node_id_str = 1;               // 设备标识（实测 "WLC"）
+    string subscription_id_str = 3;       // 订阅号（配置里的 subscription id）
+    string encoding_path = 6;             // yang-push 路径
+    uint64 collection_id = 8;             // 采集批次号
+    uint64 msg_timestamp = 9;             // 消息时间戳（毫秒）
+    uint64 collection_end_time = 10;      // 采集结束（毫秒）
+    TelemetryField data_gpb = 11;         // KV-GPB 载荷
+    uint64 collection_interval = 13;      // 采样周期（毫秒）
 }
 
-// KV-GPB 的数据树节点：name + 标量值 + 递归子节点。
-// 例如 wireless-client-oper 的一个客户端条目：
+// KV-GPB 数据树节点：name + 标量值 + 递归子节点（字段号 wire 实测）。
+// 例如 client-oper-data 的一个客户端条目：
 //   fields=[
-//     {name:"client_mac", string_value:"02a7.289a.e673"},
-//     {name:"ap_name",    string_value:"SZHO-AP13"},
-//     {name:"rssi",       sint32_value:-58},
+//     {name:"ms_mac_addr", string_value:"aa:bb:cc:dd:ee:ff"},
+//     {name:"ap_name",     string_value:"SZHO-AP13"},
+//     {name:"client_rssi", sint32_value:-58},
 //   ]
 message TelemetryField {
-    uint64 start_time = 1;                // 字段相关起始时间
-    uint64 end_time = 2;                  // 字段相关结束时间
-    string name = 3;                      // 字段名（YANG 的 JSON 名）
+    uint64 start_time = 1;                // 节点相关起始时间
+    string name = 2;                      // 字段名（YANG 的 JSON 名）
 
     oneof value_by_type {
         bytes bytes_value = 4;
