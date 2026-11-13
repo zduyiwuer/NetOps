@@ -2,7 +2,7 @@
 
 覆盖：
   1. 设备管理表格无横向滚动（列宽合计不超过可用宽度）
-  2. 设备管理展开行显示位置/资产编号/序列号
+  2. 设备管理主表格显示位置/资产编号/序列号/设备类型列
   3. Telemetry 可订阅路径含无线终端路径，且支持新增自定义路径
   4. 防火墙会话页正常渲染，显示会话数与趋势图
 
@@ -146,16 +146,26 @@ def main() -> int:
         else:
             check("设备表格无横向滚动", False, "未找到表格容器")
 
-        # 展开行
+        # 位置 / 资产编号 / 序列号 / 设备类型已提升为主表格列
+        # （不再使用展开行——按需求与设备名称合并，不占独立列）
         try:
-            page.locator(".el-table__expand-icon").first.click(timeout=5000)
-            page.wait_for_timeout(1200)
-            expanded = page.inner_text("body")
-            check("展开行显示位置/资产编号/序列号",
-                  "资产编号" in expanded and "序列号" in expanded)
+            body_text = page.inner_text("body")
+            check(
+                "主表格显示位置/资产编号/序列号/设备类型列",
+                all(
+                    k in body_text
+                    for k in ("位置", "资产编号", "序列号", "设备类型")
+                ),
+                "四列应直接出现在设备表格",
+            )
+            check(
+                "无独立展开箭头列",
+                page.locator(".el-table__expand-column").count() == 0,
+                "展开列应已删除",
+            )
             page.screenshot(path=str(SHOT_DIR / "devices-expanded.png"))
         except Exception as exc:
-            check("展开行显示位置/资产编号/序列号", False, str(exc)[:60])
+            check("主表格显示位置/资产编号/序列号/设备类型列", False, str(exc)[:60])
 
         # ---- Telemetry 路径
         page.goto(f"{BASE}/#/telemetry", wait_until="networkidle")

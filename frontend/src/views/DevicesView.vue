@@ -54,29 +54,8 @@
       </div>
 
       <el-table border v-loading="loading" :data="items" size="small" stripe>
-        <!-- 展开行：位置 / 资产编号 / 序列号等低频字段放这里，避免主表格横向滚动 -->
-        <el-table-column type="expand" width="38">
-          <template #default="{ row }">
-            <div class="expand-info">
-              <div class="expand-item">
-                <span class="label">位置</span>
-                <span class="value">{{ row.location || '-' }}</span>
-              </div>
-              <div class="expand-item">
-                <span class="label">资产编号</span>
-                <span class="value mono">{{ row.asset_tag || '-' }}</span>
-              </div>
-              <div class="expand-item">
-                <span class="label">序列号</span>
-                <span class="value mono">{{ row.serial_number || '-' }}</span>
-              </div>
-              <div class="expand-item">
-                <span class="label">设备类型</span>
-                <span class="value">{{ deviceTypeText(row.device_type) }}</span>
-              </div>
-            </div>
-          </template>
-        </el-table-column>
+        <!-- 位置 / 资产编号 / 序列号 / 设备类型已提升为主表格列，
+             不再使用独立的展开箭头列（与设备名称占两列） -->
         <el-table-column label="设备名称" min-width="150" fixed>
           <template #default="{ row }">
             <el-link type="primary" :underline="false" @click="$router.push(`/device/${row.id}`)">

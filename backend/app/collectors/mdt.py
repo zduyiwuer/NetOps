@@ -257,7 +257,9 @@ class MdtDialoutServicer(mdt_pb2_grpc.gRPCMdtDialoutServicer):
                             update_wireless_from_msg, msg, did
                         )
                     except Exception as exc:
-                        logger.debug("MDT 无线合并失败: %s", exc)
+                        logger.exception("MDT 无线合并调度失败: %s", exc)
+                else:
+                    logger.info("MDT 未匹配到设备，跳过无线合并（node=%s）", msg.node_id_str)
 
                 # 逐条回执：设备等确认后才发下一条（9800L 实测）
                 yield mdt_pb2.MdtDialoutReply(RespId=args.ReqId)
@@ -556,6 +558,10 @@ def update_wireless_from_msg(msg: mdt_pb2.Telemetry, device_id) -> int:
         updates.append((mac, leaves))
 
     if not updates:
+        logger.info(
+            "MDT 无线合并: path=%s 未提取到条目",
+            (msg.encoding_path or "")[:60],
+        )
         return 0
 
     from app.db.session import SessionLocal
@@ -570,10 +576,15 @@ def update_wireless_from_msg(msg: mdt_pb2.Telemetry, device_id) -> int:
             .filter(WirelessClient.device_id == device_id)
             .all()
         }
+        now = datetime.now()
         for mac, leaves in updates:
+            # 纯遥测设备没有 SNMP 基础行——遇到新 MAC 直接建行
+            # （upsert），否则合并器只更新已有行、详情页永远空
             c = clients.get(mac)
             if c is None:
-                continue
+                c = WirelessClient(device_id=device_id, mac=mac, ts=now)
+                clients[mac] = c
+                db.add(c)
             changed = False
             if is_location:
                 snr = leaves.get("radio-measurements.snr")
@@ -599,12 +610,18 @@ def update_wireless_from_msg(msg: mdt_pb2.Telemetry, device_id) -> int:
                     c.slot = int(slot)
                     changed = True
             if changed:
+                c.ts = now
                 touched += 1
         if touched:
             db.commit()
     except Exception as exc:
         db.rollback()
-        logger.debug("MDT 无线合并失败: %s", exc)
+        logger.exception("MDT 无线合并失败: %s", exc)
     finally:
         db.close()
+    if touched or updates:
+        logger.info(
+            "MDT 无线合并: path=%s 条目=%d 更新=%d",
+            (msg.encoding_path or "")[:60], len(updates), touched,
+        )
     return touched
