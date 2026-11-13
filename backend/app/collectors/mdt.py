@@ -681,6 +681,12 @@ def update_wireless_from_msg(msg: mdt_pb2.Telemetry, device_id) -> int:
                                 break
                     if v is not None and v != getattr(ap_row, col):
                         setattr(ap_row, col, conv(v))
+                # CDP 地址键诊断（debug 级）
+                if "cdp-cache-ap-address" in leaves:
+                    logger.debug(
+                        "MDT CDP 地址: ap=%s ip=%s",
+                        ap_name[:20], str(leaves.get("cdp-cache-ap-address"))[:20],
+                    )
                 # rrm 的噪底（noise-floor 键，dBm）——订阅数据里
                 # 有该字段时自动填充 AP 行
                 for nk in ("noise-floor", "oper-data.noise-floor"):
