@@ -281,6 +281,47 @@ class SnmpClient:
         except Exception as exc:  # 网络异常统一转为 SnmpError
             raise SnmpError(f"SNMP GET 失败: {exc}") from exc
 
+    async def getnext(self, oids: Iterable[str]) -> SnmpResult:
+        """批量 GETNEXT：取每个 OID 的**下一个**实例。
+
+        探测设备是否支持某个子树用——GETNEXT(oid) 返回的 OID
+        若仍是该 oid 的后代（前缀匹配），说明设备实现了这个子树；
+        若跳到了别处（大于该 oid 的下一个兄弟子树），说明不支持。
+        这比 GET(oid.0) 通用：标识节点 / 表 / 表列 / 标量都能测。
+        """
+        from pysnmp.hlapi.asyncio import next_cmd
+
+        oid_list = [o.strip().lstrip(".") for o in oids if o]
+        if not oid_list:
+            return SnmpResult(ok=True, values={})
+        started = time.perf_counter()
+        try:
+            engine = SnmpEngine()
+            transport = await self._transport()
+            err_ind, err_status, err_idx, var_binds = await next_cmd(
+                engine,
+                self._auth_data(),
+                transport,
+                ContextData(),
+                *[ObjectType(ObjectIdentity(oid)) for oid in oid_list],
+                lookupMib=False,
+            )
+            elapsed = (time.perf_counter() - started) * 1000
+            if err_ind:
+                return SnmpResult(ok=False, error=str(err_ind), elapsed_ms=elapsed)
+            if err_status:
+                return SnmpResult(ok=False, error=f"{err_status.prettyPrint()} @{err_idx}", elapsed_ms=elapsed)
+            values: Dict[str, Any] = {}
+            for var_bind in var_binds:
+                name = str(var_bind[0])
+                raw = var_bind[1]
+                if hasattr(raw, "isSameTypeWith") and raw.isSameTypeWith(rfc1902_null):
+                    continue
+                values[name] = _decode(raw)
+            return SnmpResult(ok=True, values=values, elapsed_ms=elapsed)
+        except Exception as exc:
+            raise SnmpError(f"SNMP GETNEXT 失败: {exc}") from exc
+
     async def walk(self, root_oid: str) -> SnmpResult:
         """遍历子树，返回 {oid: value}。"""
         started = time.perf_counter()

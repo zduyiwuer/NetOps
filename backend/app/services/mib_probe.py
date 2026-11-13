@@ -23,7 +23,10 @@ async def probe_device_mibs(
     """探测设备对指定 MIB 指标的支持情况。
 
     node_ids 为空时按 keyword 在已上传的 MIB 里筛选指标。
-    返回每个指标的：OID、名称、是否支持、当前值、单位描述。
+    用 **GETNEXT** 探测（而非 GET oid.0）：返回的 OID 仍是候选的
+    后代就说明设备实现了该子树——标识节点 / 表 / 表列 / 标量
+    都能测，不会再出现「搜到的指标是标识类型、探测却是 0 个」
+    的情况（如 FortiGate 的 fgt301E 型号标识）。
     """
     from app.db.session import SessionLocal
     from app.models.models import MibNode
@@ -38,10 +41,16 @@ async def probe_device_mibs(
             q = q.filter(
                 (MibNode.name.like(like)) | (MibNode.oid.like(like))
             )
-        # 只探测标量型（表格节点的 OID 是表头，探测无意义）
-        rows = q.filter(MibNode.type_label == "标量").order_by(
-            MibNode.oid_tuple
-        ).limit(limit).all()
+        # 标量优先排前（探测结果更有意义），其余类型也参与
+        rows = (
+            q.order_by(
+                # type_label == "标量" 的排前（False > True 升序反转）
+                MibNode.type_label != "标量",
+                MibNode.oid_tuple,
+            )
+            .limit(limit)
+            .all()
+        )
         nodes = [
             {
                 "id": r.id,
@@ -50,6 +59,7 @@ async def probe_device_mibs(
                 "syntax": r.syntax,
                 "description": r.description,
                 "access": r.access,
+                "type_label": r.type_label,
             }
             for r in rows
         ]
@@ -61,25 +71,16 @@ async def probe_device_mibs(
             "total": 0,
             "supported": 0,
             "items": [],
-            "message": "没有可探测的标量指标（可换个关键字，或上传的 MIB 里缺少标量定义）",
+            "message": "没有匹配的指标（可换个关键字，或上传对应的 MIB 文件）",
         }
 
     client = SnmpClient(target_from_device(device))
-    # 标量指标的**实例** OID 是在定义 OID 后加 ".0"——这是 SNMP 的约定。
-    # MIB 里定义的是 1.3.6.1.4.1.12356.101.1.1，
-    # 而设备上可读的是 1.3.6.1.4.1.12356.101.1.1.0。
-    # 查询用的 OID 不能带前导点（SNMP 要求点分数字形式）。
-    query_oids: List[str] = []
-    for n in nodes:
-        base = n["oid"].strip().lstrip(".").rstrip(".")
-        query_oids.append(base + ".0" if not base.endswith(".0") else base)
+    # GETNEXT 探测：查候选 OID 的下一个实例
+    query_oids = [n["oid"].strip().lstrip(".") for n in nodes]
 
-    values: Dict[str, Any] = {}
     try:
-        result = await client.get(query_oids)
-        if result.ok:
-            values = result.values
-        else:
+        result = await client.getnext(query_oids)
+        if not result.ok:
             # SNMP 整体失败（认证/超时），返回错误信息
             return {
                 "total": len(nodes),
@@ -95,20 +96,37 @@ async def probe_device_mibs(
             "error": f"SNMP 请求异常: {exc}",
         }
 
+    values = result.values
+
+    def _prefix(oid_a: str, oid_b: str) -> bool:
+        """oid_a 是 oid_b 的后代（或相等）。"""
+        a = oid_a.strip(".").split(".")
+        b = oid_b.strip(".").split(".")
+        return a[: len(b)] == b
+
     items = []
     supported = 0
-    for n, q in zip(nodes, query_oids):
-        raw = values.get(q)
-        # "No Such Object/Instance" 表示设备不支持该 OID
-        is_supported = raw is not None and not str(raw).startswith("No Such")
+    for n, base in zip(nodes, query_oids):
+        # GETNEXT 响应里找到「>= base 的第一个 OID」
+        # next_cmd 已按请求顺序返回，但响应 dict 无序——遍历找前缀匹配
+        hit_oid = None
+        hit_val = None
+        for resp_oid, val in values.items():
+            if _prefix(resp_oid, base):
+                # 取最靠近 base 的（最深前缀）
+                if hit_oid is None or resp_oid < hit_oid:
+                    hit_oid, hit_val = resp_oid, val
+        is_supported = hit_oid is not None and not str(hit_val).startswith("No Such")
         if is_supported:
             supported += 1
         items.append(
             {
                 **n,
-                "query_oid": q,
+                "query_oid": base,
                 "supported": is_supported,
-                "value": raw if is_supported else None,
+                # 命中的实例 OID（比定义多出的部分就是索引/.0）
+                "hit_oid": hit_oid,
+                "value": hit_val if is_supported else None,
             }
         )
 

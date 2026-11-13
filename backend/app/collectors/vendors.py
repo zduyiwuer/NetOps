@@ -336,23 +336,35 @@ VENDORS: Dict[str, VendorProfile] = {
         netmiko_device_type="fortinet",
         category="防火墙",
         desc="飞塔 FortiGate 防火墙；额外采集会话数、VPN 隧道数等安全设备专属指标",
-        # FORTINET-MIB: fgSysCpuUtilization / fgSysMemUsage
+        # FORTINET-FORTIGATE-MIB 有两代 OID 布局，都保留（新版优先）：
+        # - 新版（FortiOS 7.x 实测，301E/600D 验证）：fgSys* 在 .101.4.1.*
+        # - 旧版（官方文档传统布局）：fgSys* 在 .101.1.* / .101.1.2.*
+        # 设备取不到第一个会自动试下一个（_pick 按顺序命中即止）
         cpu_oids=[
-            "1.3.6.1.4.1.12356.101.1.1.1.0",  # fgSysCpuUtilization
+            "1.3.6.1.4.1.12356.101.4.1.3.0",  # fgSysCpuUsage（新）
+            "1.3.6.1.4.1.12356.101.1.1.1.0",  # fgSysCpuUtilization（旧）
             f"{OID_HR_PROCESSOR_LOAD}.1",
         ],
         mem_total_oids=[
-            "1.3.6.1.4.1.12356.101.1.1.2.0",  # fgSysMemTotal
+            "1.3.6.1.4.1.12356.101.1.1.2.0",  # fgSysMemTotal（旧，新版无总量标量）
             OID_HR_MEMORY_SIZE,
         ],
-        mem_used_oids=[
-            "1.3.6.1.4.1.12356.101.1.1.3.0",  # fgSysMemUsage
+        # 新版 fgSysMemUsage 直接是百分比（0-100）
+        mem_pct_oids=[
+            "1.3.6.1.4.1.12356.101.4.1.4.0",  # fgSysMemUsage（新，百分比）
         ],
-        # 飞塔特有：并发会话数、登录用户数、VPN 隧道数
+        mem_used_oids=[
+            "1.3.6.1.4.1.12356.101.1.1.3.0",  # fgSysMemUsage（旧，MB）
+        ],
+        # 飞塔特有：并发会话数等安全设备专属指标
         extra_oids={
-            "session_count": ["1.3.6.1.4.1.12356.101.1.2.6.0"],  # fgSysSesCount
-            "user_count": ["1.3.6.1.4.1.12356.101.1.2.7.0"],  # fgSysUserCount
-            "vpn_tunnel_count": ["1.3.6.1.4.1.12356.101.1.2.10.0"],  # fgSysVpnTunnelCount
+            "session_count": [
+                "1.3.6.1.4.1.12356.101.4.1.8.0",   # fgSysSesCount（新）
+                "1.3.6.1.4.1.12356.101.1.2.6.0",   # fgSysSesCount（旧）
+            ],
+            "session_rate_1": ["1.3.6.1.4.1.12356.101.4.1.11.0"],  # fgSysSesRate1（新）
+            "user_count": ["1.3.6.1.4.1.12356.101.1.2.7.0"],  # fgSysUserCount（旧）
+            "vpn_tunnel_count": ["1.3.6.1.4.1.12356.101.1.2.10.0"],  # fgSysVpnTunnelCount（旧）
         },
         extra_ssh_cmds={
             "session_count": ["get system performance status"],

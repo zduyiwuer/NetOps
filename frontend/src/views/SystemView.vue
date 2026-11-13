@@ -401,7 +401,15 @@
             </span>
           </div>
 
-          <el-table v-loading="mibLoading" :data="mibFiles" size="small" stripe empty-text="尚未上传 MIB 文件">
+          <el-table
+            v-loading="mibLoading"
+            :data="mibFiles"
+            size="small"
+            stripe
+            empty-text="尚未上传 MIB 文件"
+            :row-class-name="mibRowClass"
+            @row-click="filterMibNodes"
+          >
             <el-table-column prop="original_name" label="文件名" min-width="220" show-overflow-tooltip />
             <el-table-column prop="module_name" label="MIB 模块" width="180">
               <template #default="{ row }">
@@ -424,9 +432,17 @@
                 </el-tag>
               </template>
             </el-table-column>
-            <el-table-column label="操作" width="80" align="center">
+            <el-table-column label="操作" width="150" align="center">
               <template #default="{ row }">
-                <el-button link type="danger" size="small" @click="removeMib(row)">删除</el-button>
+                <el-button
+                  link
+                  :type="mibFileFilter === row.id ? 'primary' : ''"
+                  size="small"
+                  @click.stop="filterMibNodes(row)"
+                >
+                  {{ mibFileFilter === row.id ? '取消过滤' : '查看指标' }}
+                </el-button>
+                <el-button link type="danger" size="small" @click.stop="removeMib(row)">删除</el-button>
               </template>
             </el-table-column>
           </el-table>
@@ -496,8 +512,14 @@
               </template>
             </el-table-column>
             <el-table-column prop="name" label="指标名称" width="240" class-name="mono" show-overflow-tooltip />
-            <el-table-column prop="oid" label="OID" width="270" class-name="mono" show-overflow-tooltip />
-            <el-table-column label="当前值" width="160">
+            <el-table-column prop="oid" label="OID" width="250" class-name="mono" show-overflow-tooltip />
+            <el-table-column label="命中的实例 OID" width="250" class-name="mono" show-overflow-tooltip>
+              <template #default="{ row }">
+                <span v-if="row.hit_oid" class="mono">{{ row.hit_oid }}</span>
+                <span v-else class="text-muted">-</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="当前值" width="150">
               <template #default="{ row }">
                 <span v-if="row.supported" class="mono">{{ row.value }}</span>
                 <span v-else class="text-muted">-</span>
@@ -512,8 +534,15 @@
           <div class="card-title">
             <span>已上传 MIB 的指标清单</span>
             <span class="text-muted" style="font-size: 12px">
-              共 {{ mibNodeTotal }} 个指标（分页展示）
+              {{
+                mibFileFilter
+                  ? `仅显示 ${mibFilterName} · 共 ${mibNodeTotal} 个指标`
+                  : `全部文件 · 共 ${mibNodeTotal} 个指标（分页展示）`
+              }}
             </span>
+            <el-tag v-if="mibFileFilter" closable size="small" @close="filterMibNodes(null)">
+              {{ mibFilterName }}
+            </el-tag>
           </div>
           <el-table v-loading="mibNodeLoading" :data="mibNodes" size="small" stripe empty-text="没有匹配的指标">
             <el-table-column prop="name" label="指标名称" width="260" class-name="mono" show-overflow-tooltip />
@@ -1182,6 +1211,26 @@ const mibFiles = ref([])
 const mibNodes = ref([])
 const mibNodePage = ref(1)
 const mibNodePageSize = 200
+// 按文件过滤指标清单：点哪个文件就显示哪个的指标
+const mibFileFilter = ref(null)
+const mibFilterName = ref('')
+
+function filterMibNodes(row) {
+  // 点同一行再点一次 = 取消过滤
+  if (!row || mibFileFilter.value === row.id) {
+    mibFileFilter.value = null
+    mibFilterName.value = ''
+  } else {
+    mibFileFilter.value = row.id
+    mibFilterName.value = row.original_name || row.module_name || ''
+  }
+  mibNodePage.value = 1
+  searchMibNodes()
+}
+
+function mibRowClass({ row }) {
+  return mibFileFilter.value === row.id ? 'current-row-highlight' : ''
+}
 const mibLoading = ref(false)
 const mibNodeLoading = ref(false)
 const mibUploading = ref(false)
@@ -1260,6 +1309,7 @@ async function searchMibNodes() {
   try {
     const res = await mibApi.nodes({
       keyword: mibKeyword.value || undefined,
+      mib_file_id: mibFileFilter.value || undefined,
       limit: mibNodePageSize,
       offset: (mibNodePage.value - 1) * mibNodePageSize,
     })
@@ -1294,6 +1344,10 @@ async function onMibSelected(file) {
 }
 
 async function removeMib(row) {
+  if (mibFileFilter.value === row.id) {
+    mibFileFilter.value = null
+    mibFilterName.value = ''
+  }
   try {
     await ElMessageBox.confirm(
       `确定删除 MIB 文件「${row.original_name}」及其 ${row.node_count} 个指标索引吗？`,
@@ -1408,3 +1462,8 @@ onMounted(async () => {
 })
 onUnmounted(() => window.removeEventListener('netops:refresh', reload))
 </script>
+/* MIB 文件表：当前过滤的文件行高亮 */
+:deep(.el-table .current-row-highlight) {
+  background-color: var(--el-color-primary-light-9) !important;
+}
+
