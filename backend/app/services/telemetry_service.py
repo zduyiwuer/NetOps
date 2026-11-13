@@ -241,7 +241,27 @@ def store_telemetry_samples(
         numeric_samples = [
             s for s in samples if _to_float(s.value) is not None
         ]
-        for s in numeric_samples[:200]:
+        # 字符串子项（ap-mac / ssid / bssid / 协议类型 / client-mac 等）
+        # 也限量入库——否则「订阅包含哪些子项」在遥测页看不到，
+        # 数值与字符串各留独立限额互不挤占
+        string_samples = [
+            s for s in samples
+            if _to_float(s.value) is None
+            and isinstance(s.value, str)
+            and len(s.value) <= 120
+        ]
+        # 字符串样本按 metric 去重（每批每路径存最新一条，
+        # 避免同名字段重复占限额）
+        seen_metrics = set()
+        deduped_strings = []
+        for s in reversed(string_samples):
+            if s.metric not in seen_metrics:
+                seen_metrics.add(s.metric)
+                deduped_strings.append(s)
+        audit_samples = (
+            numeric_samples[:200] + list(reversed(deduped_strings))[:100]
+        )
+        for s in audit_samples:
             num = _to_float(s.value)
             db.add(
                 TelemetrySampleModel(
