@@ -292,6 +292,13 @@
               </el-tag>
             </template>
           </el-table-column>
+          <el-table-column label="来源" width="75" align="center">
+            <template #default="{ row }">
+              <el-tag size="small" effect="plain" :type="row.source === 'telemetry' ? 'success' : 'info'">
+                {{ row.source === 'telemetry' ? '遥测' : 'SNMP' }}
+              </el-tag>
+            </template>
+          </el-table-column>
         </el-table>
       </div>
 
@@ -387,10 +394,17 @@
               </span>
             </template>
           </el-table-column>
-          <el-table-column prop="state" label="状态" width="85" align="center">
+          <el-table-column prop="state" label="状态" width="110" align="center" show-overflow-tooltip>
             <template #default="{ row }">
               <el-tag size="small" effect="plain" :type="row.state === 'Run' ? 'success' : 'info'">
                 {{ row.state }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="来源" width="75" align="center">
+            <template #default="{ row }">
+              <el-tag size="small" effect="plain" :type="row.source === 'telemetry' ? 'success' : 'info'">
+                {{ row.source === 'telemetry' ? '遥测' : 'SNMP' }}
               </el-tag>
             </template>
           </el-table-column>

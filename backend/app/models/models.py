@@ -473,6 +473,9 @@ class WirelessAP(Base):
     state: Mapped[str] = mapped_column(String(48), default="")
     # 各 slot 的信道，如 "slot0: 11 / slot1: 52"
     channels: Mapped[str] = mapped_column(String(120), default="")
+    # 数据来源：telemetry（遥测推送，优先）/ snmp（轮询）——
+    # 遥测来源的行不会被 SNMP 轮询的整体替换清掉
+    source: Mapped[str] = mapped_column(String(16), default="snmp")
     ts: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
 
 
@@ -521,6 +524,8 @@ class WirelessClient(Base):
     packets_in: Mapped[int] = mapped_column(Integer, default=0)
     packets_out: Mapped[int] = mapped_column(Integer, default=0)
     state: Mapped[str] = mapped_column(String(48), default="")
+    # 数据来源：telemetry（遥测推送，优先）/ snmp（轮询）
+    source: Mapped[str] = mapped_column(String(16), default="snmp")
     ts: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
 
 

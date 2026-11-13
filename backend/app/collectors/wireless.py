@@ -323,26 +323,97 @@ def save_wireless(
     aps: List[Dict[str, Any]],
     clients: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
-    """落库（整体替换最新快照），并检测漫游。"""
+    """落库（SNMP 快照合并），并检测漫游。
+
+    采集数据展示优先级：遥测 > SNMP > SSH——SNMP 轮询（分钟级）
+    **不能覆盖**遥测推送（5-30 秒级）已写入的行：
+    - 按 key（AP name / 客户端 mac）upsert
+    - 已有 telemetry 来源的行跳过（保留遥测的字段与新鲜度），
+      只给 SNMP 独有的字段（收发流量等）补充更新
+    - SNMP 独有的行正常替换（删除本轮没出现的 SNMP 行）
+    """
     from app.db.session import SessionLocal
     from app.models.models import WirelessAP, WirelessClient
 
-    # 先做漫游检测（要用旧数据），再整体替换
+    # 先做漫游检测（要用旧数据），再合并
     events = detect_roaming(device_id, clients)
 
     db = SessionLocal()
     try:
-        db.query(WirelessAP).filter(WirelessAP.device_id == device_id).delete(
-            synchronize_session=False
-        )
-        db.query(WirelessClient).filter(
-            WirelessClient.device_id == device_id
-        ).delete(synchronize_session=False)
         now = datetime.now()
+
+        # ---- AP 表 ----
+        old_aps = {
+            a.name: a
+            for a in db.query(WirelessAP)
+            .filter(WirelessAP.device_id == device_id)
+            .all()
+        }
+        seen = set()
         for a in aps:
-            db.add(WirelessAP(device_id=device_id, ts=now, **a))
+            key = a.get("name") or ""
+            if not key:
+                continue
+            seen.add(key)
+            old = old_aps.get(key)
+            if old is not None and old.source == "telemetry":
+                # 遥测优先：只补充 SNMP 独有字段，不覆盖遥测数据
+                continue
+            if old is not None:
+                for k, v in a.items():
+                    if hasattr(old, k) and v is not None:
+                        setattr(old, k, v)
+                old.ts = now
+                old.source = "snmp"
+            else:
+                db.add(WirelessAP(device_id=device_id, ts=now, source="snmp", **a))
+        # 删除本轮消失的 SNMP 来源 AP（遥测来源的不动）
+        gone = [
+            k
+            for k, a in old_aps.items()
+            if k not in seen and a.source == "snmp"
+        ]
+        for k in gone:
+            db.delete(old_aps[k])
+
+        # ---- 客户端表 ----
+        old_clients = {
+            c.mac: c
+            for c in db.query(WirelessClient)
+            .filter(WirelessClient.device_id == device_id)
+            .all()
+        }
+        seen_c = set()
         for c in clients:
-            db.add(WirelessClient(device_id=device_id, ts=now, **c))
+            key = c.get("mac") or ""
+            if not key:
+                continue
+            seen_c.add(key)
+            old = old_clients.get(key)
+            if old is not None and old.source == "telemetry":
+                # 遥测优先：只补充收发流量等 SNMP 独有字段
+                for f in ("bytes_in", "bytes_out", "packets_in", "packets_out"):
+                    if c.get(f) is not None:
+                        setattr(old, f, c[f])
+                continue
+            if old is not None:
+                for k, v in c.items():
+                    if hasattr(old, k) and v is not None:
+                        setattr(old, k, v)
+                old.ts = now
+                old.source = "snmp"
+            else:
+                db.add(
+                    WirelessClient(device_id=device_id, ts=now, source="snmp", **c)
+                )
+        gone_c = [
+            k
+            for k, c in old_clients.items()
+            if k not in seen_c and c.source == "snmp"
+        ]
+        for k in gone_c:
+            db.delete(old_clients[k])
+
         db.commit()
     except Exception as exc:
         db.rollback()

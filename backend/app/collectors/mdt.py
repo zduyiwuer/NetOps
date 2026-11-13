@@ -493,17 +493,18 @@ class MdtCollectorServer:
 
 # ---------------------------------------------------------------- 无线表合并
 def update_wireless_from_msg(msg: mdt_pb2.Telemetry, device_id) -> int:
-    """把 MDT 推送的无线数据实时合并进 wireless_clients 表。
+    """把 MDT 推送的无线数据实时合并进 wireless_ap / wireless_clients 表。
 
-    MDT 是 5-30 秒粒度，比 SNMP 轮询（分钟级）新——telemetry 优先：
-    - client-oper-data（订阅 3）：ap-name / slot / radio 协议 / wlan-id
-    - location-oper-data（订阅 4）：keys.client-mac-addr +
-      radio-measurements.snr + sample.rssi-value（<-120 的值是设备
-      的「无效」标记，丢弃）
-    噪底 / 速率字段当前订阅集不提供（client-oper-data 的 YANG
-    无此字段）；设备加了 rrm-oper 等订阅后此处扩展键名即可填充。
+    展示优先级：遥测 > SNMP > SSH——MDT 是 5-30 秒粒度（远快于
+    SNMP 轮询），合并时把行标成 telemetry 来源；SNMP 轮询的
+    save_wireless 遇到 telemetry 行不覆盖。
+    - client-oper-data：ap-name / slot / state（co-state/client-type）
+    - access-point-oper-data：AP 主数据（ap-name / wtp-mac / ip /
+      model / serial 等，键名按常见 YANG 宽松匹配）→ 无线 AP 表
+    - location-oper-data：每客户端 RSSI / SNR（<-120 是设备的
+      「无效」标记，丢弃）
 
-    返回更新的客户端数。
+    返回更新的行数（AP + 客户端）。
     """
     if not device_id or not msg.HasField("data_gpb"):
         return 0
@@ -511,6 +512,7 @@ def update_wireless_from_msg(msg: mdt_pb2.Telemetry, device_id) -> int:
     if "wireless" not in path:
         return 0
     is_location = "location" in path
+    is_ap = "access-point-oper" in path
 
     def _leaves(field: mdt_pb2.TelemetryField, prefix: str) -> Dict[str, Any]:
         """深度优先收集条目内全部叶子（路径相对条目容器）。"""
@@ -525,26 +527,34 @@ def update_wireless_from_msg(msg: mdt_pb2.Telemetry, device_id) -> int:
                     out[key] = v
         return out
 
-    # 数据树：.../<条目容器>/<重复条目>（client-oper-data 下是
-    # common-oper-data × N；location-rssi-metrics 下是 rssi-metric × N）
+    # 数据树：.../<条目容器>/<重复条目>。一棵树里可能有**多个**条目组
+    # （access-point-oper-data 下既有 ap-radio-neighbor × N，
+    # 也有 AP 主数据条目 × N）——要全部收集，不能找到第一个组就停
     updates: List[Tuple[str, Dict[str, Any]]] = []
-    root = msg.data_gpb
-    # 找到重复条目的层级：任意层里同名兄弟 ≥2 的那一层
-    def _find_entries(field: mdt_pb2.TelemetryField) -> List[mdt_pb2.TelemetryField]:
+    root = msg.data_gpb  # noqa: F841（条目提取见下方 _iter_entries）
+
+    def _find_entry_groups(
+        field: mdt_pb2.TelemetryField,
+    ) -> List[List[mdt_pb2.TelemetryField]]:
+        groups: List[List[mdt_pb2.TelemetryField]] = []
         names = [f.name for f in field.fields]
         for name in set(names):
-            if names.count(name) >= 1:
-                group = [f for f in field.fields if f.name == name]
-                if len(group) >= 2 and all(g.fields for g in group):
-                    return group
+            group = [f for f in field.fields if f.name == name]
+            if len(group) >= 2 and all(g.fields for g in group):
+                groups.append(group)
+        # 深一层找（keys / content 等单例容器要穿透）
         for f in field.fields:
-            if f.fields:
-                sub = _find_entries(f)
-                if sub:
-                    return sub
-        return []
+            if f.fields and not any(f in g for g in groups):
+                groups.extend(_find_entry_groups(f))
+        return groups
 
-    for entry in _find_entries(root)[:300]:
+    def _iter_entries(msg_root: mdt_pb2.TelemetryField):
+        for group in _find_entry_groups(msg_root):
+            for entry in group[:300]:
+                yield entry
+
+    ap_updates: List[Tuple[str, Dict[str, Any]]] = []
+    for entry in _iter_entries(root):
         leaves = _leaves(entry, "")
         if not leaves:
             continue
@@ -553,11 +563,26 @@ def update_wireless_from_msg(msg: mdt_pb2.Telemetry, device_id) -> int:
             if ("client-mac" in k or "ms-mac" in k) and isinstance(v, str):
                 mac = v
                 break
-        if not mac:
+        if mac:
+            updates.append((mac, leaves))
             continue
-        updates.append((mac, leaves))
+        # AP 主数据条目：有 ap-name（或 wtp-mac）而无客户端 MAC
+        if is_ap:
+            ap_name = None
+            for k, v in leaves.items():
+                if k.endswith("ap-name") and isinstance(v, str) and v:
+                    ap_name = v
+                    break
+            if ap_name:
+                if len(ap_updates) == 0:
+                    # 首个 AP 条目的字段名（诊断键名映射用）
+                    logger.info(
+                        "MDT AP 条目字段: %s",
+                        {k: str(v)[:20] for k, v in list(leaves.items())[:25]},
+                    )
+                ap_updates.append((ap_name, leaves))
 
-    if not updates:
+    if not updates and not ap_updates:
         logger.info(
             "MDT 无线合并: path=%s 未提取到条目",
             (msg.encoding_path or "")[:60],
@@ -565,18 +590,64 @@ def update_wireless_from_msg(msg: mdt_pb2.Telemetry, device_id) -> int:
         return 0
 
     from app.db.session import SessionLocal
-    from app.models.models import WirelessClient
+    from app.models.models import WirelessAP, WirelessClient
 
     touched = 0
     db = SessionLocal()
     try:
+        now = datetime.now()
+
+        # ---- 无线 AP 表（遥测优先 upsert）----
+        if ap_updates:
+            aps = {
+                a.name: a
+                for a in db.query(WirelessAP)
+                .filter(WirelessAP.device_id == device_id)
+                .all()
+            }
+            for ap_name, leaves in ap_updates[:200]:
+                ap_row = aps.get(ap_name)
+                if ap_row is None:
+                    ap_row = WirelessAP(
+                        device_id=device_id, name=ap_name, ts=now
+                    )
+                    aps[ap_name] = ap_row
+                    db.add(ap_row)
+                # 键名按常见 YANG 宽松匹配（设备版本差异容忍）
+                # 键名按 9800L 实测报文（16:15 批 dump）：
+                # mac-addr / wtp-mac-addr / ip-address.ip-address-value
+                for lk, col, conv in (
+                    ("mac-addr", "radio_mac", str),
+                    ("wtp-mac-addr", "radio_mac", str),
+                    ("wtp-mac", "radio_mac", str),
+                    ("ip-address.ip-address-value", "ip", str),
+                    ("ip-address", "ip", str),
+                    ("serial-number", "serial_number", str),
+                    ("serial-num", "serial_number", str),
+                    ("model", "model", str),
+                    ("model-id", "model", str),
+                    ("description", "location", str),
+                    ("location", "location", str),
+                ):
+                    v = leaves.get(lk)
+                    if v is None:
+                        # 嵌套路径（如 oper-data.wtp-mac）
+                        for k2, v2 in leaves.items():
+                            if k2.endswith("." + lk) and v2:
+                                v = v2
+                                break
+                    if v is not None and v != getattr(ap_row, col):
+                        setattr(ap_row, col, conv(v))
+                ap_row.source = "telemetry"
+                ap_row.ts = now
+                touched += 1
+
         clients = {
             c.mac: c
             for c in db.query(WirelessClient)
             .filter(WirelessClient.device_id == device_id)
             .all()
         }
-        now = datetime.now()
         for mac, leaves in updates:
             # 纯遥测设备没有 SNMP 基础行——遇到新 MAC 直接建行
             # （upsert），否则合并器只更新已有行、详情页永远空
@@ -609,9 +680,23 @@ def update_wireless_from_msg(msg: mdt_pb2.Telemetry, device_id) -> int:
                 if isinstance(slot, (int, float)) and int(slot) != c.slot:
                     c.slot = int(slot)
                     changed = True
+                # 状态 / 协议（co-state 如 associated，client-type
+                # 如 dot11-client-normal）→ 状态列
+                state = (
+                    leaves.get("co-state")
+                    or leaves.get("client-type")
+                    or ""
+                )
+                if isinstance(state, str) and state and state != c.state:
+                    c.state = state
+                    changed = True
+            # 遥测来源：SNMP 轮询不再覆盖此行的遥测字段
+            c.source = "telemetry"
             if changed:
                 c.ts = now
                 touched += 1
+            elif c.ts is None:
+                c.ts = now
         if touched:
             db.commit()
     except Exception as exc:
