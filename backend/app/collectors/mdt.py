@@ -568,6 +568,22 @@ def update_wireless_from_msg(msg: mdt_pb2.Telemetry, device_id) -> int:
         return groups
 
     def _iter_entries(msg_root: mdt_pb2.TelemetryField):
+        # 模式 1：KV-GPB 的**列表条目编码**——keys + content 且
+        # content 之下无重复子容器（一条消息就是一个条目；
+        # fsbcwlc 的 location / 单客户端批实测）。
+        # 注意必须先于重复组判定：否则嵌套的单例容器
+        # （如 radio-measurements）会被当成组抢走。
+        names = [f.name for f in msg_root.fields]
+        if "keys" in names:
+            content = next(
+                (f for f in msg_root.fields if f.name == "content"), None
+            )
+            sub = [f.name for f in content.fields] if content is not None else []
+            if len(sub) == len(set(sub)):
+                yield msg_root
+                return
+        # 模式 2：同批多条目（content 下同名兄弟重复，如
+        # common-oper-data × N / ap-radio-neighbor × N）
         for group in _find_entry_groups(msg_root):
             for entry in group[:300]:
                 yield entry
@@ -575,6 +591,17 @@ def update_wireless_from_msg(msg: mdt_pb2.Telemetry, device_id) -> int:
     ap_updates: List[Tuple[str, Dict[str, Any]]] = []
     for entry in _iter_entries(root):
         leaves = _leaves(entry, "")
+        # keys/content 兜底模式下 entry 是整棵树——叶子路径带顶层
+        # 容器前缀（keys.client-mac-addr / content.radio-*.snr），
+        # 剥掉单段前缀才能匹配字段映射键
+        if entry is root:
+            stripped: Dict[str, Any] = {}
+            for k, v in leaves.items():
+                head, _, rest = k.partition(".")
+                stripped[rest or k] = v if head in ("keys", "content") else v
+                if head not in ("keys", "content"):
+                    stripped[k] = v
+            leaves = stripped
         if not leaves:
             continue
         mac = None

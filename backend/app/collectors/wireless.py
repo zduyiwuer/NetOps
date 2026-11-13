@@ -75,11 +75,12 @@ S_COL_SNR = "26"
 
 
 def _norm_mac(v: Any) -> str:
-    """规范化 MAC 值。
+    """规范化 MAC 值 → 统一 xx:xx:xx:xx:xx:xx 小写。
 
     pysnmp 对 MacAddress 类型的解码不统一：有的返回十六进制字符串
     （"1cd1e0754920"），有的返回原始字节（b"\\x1c\\xd1\\xe0..."，
-    显示为乱码）——两种都统一成 12 位小写 hex。
+    显示为乱码）——统一成冒号格式，与 _mac_from_oid_index 一致
+    （否则 bssid 关联 AP 的 mac_to_name / channels 匹配不上）。
     """
     s = str(v)
     # 6 字节的二进制 MAC：每个字符的 latin-1 编码即原始字节
@@ -88,13 +89,15 @@ def _norm_mac(v: Any) -> str:
         if len(b) == 6 and all(c < 128 or c > 159 for c in b):
             # 确实是二进制（含非可打印字符）才转
             if any(c < 32 or c > 126 for c in b):
-                return b.hex()
+                s = b.hex()
     except (UnicodeEncodeError, ValueError):
         pass
-    # 十六进制字符串：去掉分隔符
+    # 十六进制字符串：去掉分隔符后按 2 位一组加冒号
     import re as _re
 
     cleaned = _re.sub(r"[^0-9a-fA-F]", "", s).lower()
+    if len(cleaned) == 12:
+        return ":".join(cleaned[i : i + 2] for i in range(0, 12, 2))
     return cleaned
 
 
@@ -152,7 +155,7 @@ async def collect_wireless(
     for oid, v in ap_res.values.items():
         col, idx = _split_oid(oid, AP_TABLE)
         mac = _mac_from_oid_index(idx)
-        if len(mac) != 12:
+        if len(mac) != 17:  # xx:xx:xx:xx:xx:xx
             continue
         ap_rows.setdefault(mac, {})[col] = str(v)
 
@@ -210,7 +213,7 @@ async def collect_wireless(
     for oid, v in c_res.values.items():
         col, idx = _split_oid(oid, CLIENT_TABLE)
         mac = _mac_from_oid_index(idx)
-        if len(mac) != 12:
+        if len(mac) != 17:  # xx:xx:xx:xx:xx:xx
             continue
         c_rows.setdefault(mac, {})[col] = str(v)
 
@@ -221,7 +224,7 @@ async def collect_wireless(
         for oid, v in s_res.values.items():
             col, idx = _split_oid(oid, CLIENT_STATS_TABLE)
             mac = _mac_from_oid_index(idx)
-            if len(mac) != 12:
+            if len(mac) != 17:  # xx:xx:xx:xx:xx:xx
                 continue
             stats.setdefault(mac, {})[col] = str(v)
 
