@@ -525,7 +525,9 @@ def update_wireless_from_msg(msg: mdt_pb2.Telemetry, device_id) -> int:
     if "wireless" not in path:
         return 0
     is_location = "location" in path
-    is_ap = "access-point-oper" in path
+    # AP 射频数据条目：access-point-oper（主数据/CDP）与
+    # rrm-oper（ap-auto-rf-dot11-data，按 wtp-mac 关联）两类
+    is_ap = "access-point-oper" in path or "rrm-oper" in path
 
     def _leaves(field: mdt_pb2.TelemetryField, prefix: str) -> Dict[str, Any]:
         """深度优先收集条目内全部叶子（路径相对条目容器）。"""
@@ -598,9 +600,9 @@ def update_wireless_from_msg(msg: mdt_pb2.Telemetry, device_id) -> int:
                     ap_name = f"__mac__{_norm_mac(wtp)}"
             if ap_name:
                 if len(ap_updates) == 0:
-                    # 首个 AP 条目的字段名（诊断键名映射用）
-                    logger.info(
-                        "MDT AP 条目字段: %s",
+                    # 首个 AP 条目的字段名（debug 级，诊断用）
+                    logger.debug(
+                        "MDT AP 条目[%s] 字段: %s", ap_name[:20],
                         {k: str(v)[:20] for k, v in list(leaves.items())[:25]},
                     )
                 ap_updates.append((ap_name, leaves))

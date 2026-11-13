@@ -152,6 +152,25 @@ def store_telemetry_samples(
             elif s.metric.startswith("if_") and s.interface:
                 bucket = iface_counters.setdefault(s.interface, {})
                 bucket[s.metric] = s.value
+            else:
+                # Cisco MDT 原始路径特判（KV-GPB 的 metric 是原始
+                # 叶子路径，未经映射器）——sys-report 订阅推送的
+                # 系统级数据直接归一化到设备指标：
+                # - process-cpu-oper:cpu-usage → CPU 五秒利用率
+                # - memory 池（若推）→ 内存
+                sp = (s.source_path or "").lower()
+                m = (s.metric or "").lower()
+                if "process-cpu-oper" in sp and m.endswith("five-seconds"):
+                    system_metrics["cpu_usage"] = s.value
+                elif "process-cpu-oper" in sp and m.endswith("one-minute"):
+                    # 无五秒值时用一分钟值兜底
+                    system_metrics.setdefault("cpu_usage", s.value)
+                elif "memory" in sp and "used" in m:
+                    system_metrics["mem_used"] = s.value
+                elif "memory" in sp and "free" in m:
+                    system_metrics["mem_free"] = s.value
+                elif "memory" in sp and "total" in m:
+                    system_metrics["mem_total"] = s.value
 
         # ---- 设备级指标 ----
         if system_metrics:

@@ -49,8 +49,10 @@ def get_scheduler() -> AsyncIOScheduler:
 async def _telemetry_liveness(device, db) -> Optional[DeviceSample]:
     """纯遥测设备的在线判定：最近 10 分钟内有样本即在线。
 
-    写一行仅含可达性的指标（设备信息由遥测推送归一化入库），
-    避免离线告警把关了 SNMP 轮询的设备误报成离线。
+    在线时**只更新设备状态、不写指标行**——遥测归一化（CPU/内存）
+    会自己写 DeviceMetric，此处每 30 秒再写一行空指标会把遥测
+    行顶掉（详情页取最新行），CPU 就永远显示空。只有离线判定
+    变化时才落一行，保证离线告警可触发。
     """
     from app.models.models import TelemetrySample
 
@@ -65,18 +67,21 @@ async def _telemetry_liveness(device, db) -> Optional[DeviceSample]:
             .first()
         )
         online = fresh is not None
+        was_online = device.status == "online"
         if online:
             device.last_seen = datetime.now()
             device.status = "online"
         else:
             device.status = "offline"
-        db.add(
-            DeviceMetric(
-                device_id=device.id,
-                ts=datetime.now(),
-                reachability=online,
+        # 仅在状态翻转时落指标行（在线→离线 / 离线→恢复）
+        if online != was_online:
+            db.add(
+                DeviceMetric(
+                    device_id=device.id,
+                    ts=datetime.now(),
+                    reachability=online,
+                )
             )
-        )
         db.commit()
         logger.debug(
             "设备 %s 纯遥测模式：%s",
