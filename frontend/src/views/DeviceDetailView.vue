@@ -242,6 +242,14 @@
           <el-table-column prop="name" label="AP 名称" min-width="130" show-overflow-tooltip />
           <el-table-column prop="model" label="型号" width="110" show-overflow-tooltip />
           <el-table-column prop="ip" label="IP 地址" width="135" class-name="mono" show-overflow-tooltip />
+          <el-table-column prop="client_count" label="客户端数" width="90" align="center" sortable>
+            <template #default="{ row }">
+              <el-tag v-if="row.client_count > 0" size="small" effect="plain" type="success">
+                {{ row.client_count }}
+              </el-tag>
+              <span v-else class="text-muted">0</span>
+            </template>
+          </el-table-column>
           <el-table-column prop="channels" label="信道" width="140" class-name="mono" show-overflow-tooltip>
             <template #default="{ row }">
               <span v-if="row.channels">{{ row.channels }}</span>
@@ -351,17 +359,35 @@
       <div class="table-card" style="margin-top: 12px">
         <div class="card-title">
           <span>漫游记录</span>
-          <span class="text-muted" style="font-size: 12px">
-            客户端在 AP 之间切换时自动记录（含跨频段漫游）
-          </span>
+          <div class="iface-filter">
+            <el-select v-model="roamingHours" size="small" style="width: 120px" @change="loadRoaming">
+              <el-option :value="1" label="近 1 小时" />
+              <el-option :value="6" label="近 6 小时" />
+              <el-option :value="24" label="近 24 小时" />
+              <el-option :value="168" label="近 7 天" />
+            </el-select>
+            <el-checkbox v-model="roamingBandOnly" size="small" @change="applyRoamingFilter">
+              只看跨频段
+            </el-checkbox>
+            <el-input
+              v-model="roamingKeyword"
+              placeholder="搜索 MAC / AP"
+              clearable
+              size="small"
+              style="width: 180px"
+              :prefix-icon="Search"
+              @keyup.enter="loadRoaming"
+            />
+            <el-button size="small" @click="loadRoaming">查询</el-button>
+          </div>
         </div>
         <el-table
           v-loading="roamingLoading"
-          :data="roamingEvents"
+          :data="filteredRoaming"
           size="small"
           stripe
           max-height="360"
-          empty-text="近 24 小时没有漫游记录"
+          :empty-text="roamingKeyword || roamingBandOnly ? '没有符合条件的漫游记录' : '所选时间范围内没有漫游记录'"
         >
           <el-table-column prop="ts" label="时间" width="160">
             <template #default="{ row }">{{ (row.ts || '').replace('T', ' ').slice(0, 19) }}</template>
@@ -663,6 +689,19 @@ const clientSsidFilter = ref('')
 const clientSsids = ref([])
 const roamingEvents = ref([])
 const roamingLoading = ref(false)
+const roamingHours = ref(24)
+const roamingKeyword = ref('')
+const roamingBandOnly = ref(false)
+
+// 漫游列表过滤：跨频段筛选在前端做（数据量小），文本筛选传后端
+const filteredRoaming = computed(() => {
+  if (!roamingBandOnly.value) return roamingEvents.value
+  return roamingEvents.value.filter((r) => isBandRoam(r))
+})
+
+function applyRoamingFilter() {
+  /* 跨频段是前端筛选，无需重新请求 */
+}
 
 const WIRELESS_VENDORS = ['cisco_wlc', 'aruba', 'h3c_wlc']
 const isWireless = computed(() => WIRELESS_VENDORS.includes(device.value?.vendor))
@@ -728,7 +767,10 @@ async function loadRoaming() {
   if (!isWireless.value) return
   roamingLoading.value = true
   try {
-    const res = await deviceApi.wirelessRoaming(deviceId.value, { hours: 24 })
+    const res = await deviceApi.wirelessRoaming(deviceId.value, {
+      hours: roamingHours.value,
+      keyword: roamingKeyword.value || undefined,
+    })
     roamingEvents.value = res?.items || []
   } catch (e) {
     roamingEvents.value = []

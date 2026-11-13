@@ -623,7 +623,7 @@ def list_wireless_aps(
     db: Session = Depends(get_db),
     _: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
-    """无线控制器下挂的 AP 列表（SNMP 采集，含信道与序列号）。"""
+    """无线控制器下挂的 AP 列表（SNMP 采集，含信道、序列号与客户端数）。"""
     device = db.get(Device, device_id)
     if device is None:
         raise HTTPException(status_code=404, detail="设备不存在")
@@ -638,6 +638,12 @@ def list_wireless_aps(
     if state:
         q = q.filter(WirelessAP.state == state)
     rows = q.order_by(WirelessAP.name).all()
+    # 每个 AP 上的客户端数（按 BSSID 关联当前客户端快照）
+    client_counts: Dict[str, int] = {}
+    for c in db.query(WirelessClient).filter(
+        WirelessClient.device_id == device_id, WirelessClient.bssid != ""
+    ).all():
+        client_counts[c.bssid] = client_counts.get(c.bssid, 0) + 1
     return {
         "items": [
             {
@@ -651,6 +657,7 @@ def list_wireless_aps(
                 "status": r.status,
                 "state": r.state,
                 "channels": r.channels,
+                "client_count": client_counts.get(r.radio_mac, 0),
                 "ts": r.ts.isoformat() if r.ts else "",
             }
             for r in rows

@@ -158,8 +158,13 @@ class Collector:
             sample = DeviceSample(device_id=self.device.id)
             sample.system.reachable = False
             sample.system.error = str(exc)
-            # SNMP 失败时尝试 SSH 兜底（部分设备只开 SSH）
-            if self.device.ssh_username and self.device.ssh_password:
+            # SNMP 失败时尝试 SSH 兜底（部分设备只开 SSH）；
+            # 可通过系统设置 collector.ssh_metrics_enabled=false 关闭
+            if (
+                self._ssh_metrics_enabled()
+                and self.device.ssh_username
+                and self.device.ssh_password
+            ):
                 try:
                     ssh_sample = await self._collect_ssh_fallback()
                     sample.interfaces = ssh_sample.interfaces
@@ -376,6 +381,11 @@ class Collector:
             return
         sample.wireless_aps = aps
         sample.wireless_clients = clients
+        # AP 数 / 客户端数直接用 SNMP 明细计数——
+        # 这台设备（IOS XE 17.03）没有 ciscoWlcApSum 之类的标量 OID，
+        # 之前这两个数是 SSH 命令给的，现在不需要 SSH 了
+        sample.system.extra["ap_count"] = float(len(aps))
+        sample.system.extra["client_count"] = float(len(clients))
         events = wireless_collector.save_wireless(self.device.id, aps, clients)
         if events:
             sample.wireless_roaming = events
