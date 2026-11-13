@@ -316,6 +316,29 @@ class Collector:
                     "设备 %s 无线数据采集失败: %s", self.device.name, exc
                 )
 
+        # 6) 交换机 CAM 表（接口学到的 MAC 地址，SNMP）
+        if collect_system and self.vendor.cam_snmp and self.device.use_snmp:
+            try:
+                from app.collectors import cam as cam_collector
+                from app.collectors.snmp import SnmpTarget
+
+                cam = await cam_collector.collect_cam(
+                    SnmpTarget(
+                        host=self.device.ip,
+                        port=self.device.snmp_port or 161,
+                        community=self.device.snmp_community or "public",
+                        version=(self.device.snmp_version or "2c"),
+                        timeout=6.0,
+                        retries=0,
+                    )
+                )
+                if cam:
+                    cam_collector.save_cam(self.device.id, cam)
+            except Exception as exc:
+                logger.debug(
+                    "设备 %s CAM 表采集失败: %s", self.device.name, exc
+                )
+
         sample.system.reachable = True
         return sample
 
@@ -491,6 +514,29 @@ class Collector:
         if mem_pct is not None and mem_total:
             sample.system.mem_used_mb = round(mem_total * mem_pct / 100, 2)
         sample.system.source = "ssh"
+        # 6) 交换机 CAM 表（接口学到的 MAC 地址，SNMP）
+        if collect_system and self.vendor.cam_snmp and self.device.use_snmp:
+            try:
+                from app.collectors import cam as cam_collector
+                from app.collectors.snmp import SnmpTarget
+
+                cam = await cam_collector.collect_cam(
+                    SnmpTarget(
+                        host=self.device.ip,
+                        port=self.device.snmp_port or 161,
+                        community=self.device.snmp_community or "public",
+                        version=(self.device.snmp_version or "2c"),
+                        timeout=6.0,
+                        retries=0,
+                    )
+                )
+                if cam:
+                    cam_collector.save_cam(self.device.id, cam)
+            except Exception as exc:
+                logger.debug(
+                    "设备 %s CAM 表采集失败: %s", self.device.name, exc
+                )
+
         sample.system.reachable = True
         return sample
 

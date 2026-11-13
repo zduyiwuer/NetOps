@@ -94,6 +94,8 @@ export const monitorApi = {
   overview: (params) => http.get('/monitor/overview', { params }),
   realtimeInterfaces: (params) => http.get('/monitor/interfaces/realtime', { params }),
   deviceInterfaces: (id) => http.get(`/monitor/devices/${id}/interfaces`),
+  interfaceMacs: (id, ifIndex) =>
+    http.get(`/monitor/devices/${id}/interfaces/${ifIndex}/macs`),
   deviceMetrics: (id, hours = 24) => http.get(`/monitor/devices/${id}/metrics`, { params: { hours } }),
   deviceSessions: (id, hours = 24) => http.get(`/monitor/devices/${id}/sessions`, { params: { hours } }),
   firewallSessions: (hours = 1) => http.get('/monitor/firewalls/sessions', { params: { hours } }),

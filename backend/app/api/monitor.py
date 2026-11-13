@@ -17,6 +17,7 @@ from app.models.models import (
     Device,
     DeviceLog,
     DeviceMetric,
+    InterfaceMac,
     InterfaceMetric,
     Store,
     User,
@@ -252,6 +253,7 @@ def interfaces_realtime(
             "in_errors": r.in_errors,
             "out_errors": r.out_errors,
             "utilization": r.utilization,
+            "mac_count": mac_counts.get(r.if_index, 0),
             "ts": r.ts.isoformat(),
         })
 
@@ -281,6 +283,10 @@ def device_interfaces(
     if ts is None:
         return {"items": [], "ts": None}
     rows = db.query(InterfaceMetric).filter(InterfaceMetric.device_id == device_id, InterfaceMetric.ts == ts).all()
+    # 各接口学到的 MAC 数（交换机 CAM 表，按接口统计）
+    mac_counts: Dict[int, int] = {}
+    for m in db.query(InterfaceMac).filter(InterfaceMac.device_id == device_id).all():
+        mac_counts[m.if_index] = mac_counts.get(m.if_index, 0) + 1
     items = [
         {
             "if_index": r.if_index,
@@ -298,11 +304,30 @@ def device_interfaces(
             "in_errors": r.in_errors,
             "out_errors": r.out_errors,
             "utilization": r.utilization,
+            "mac_count": mac_counts.get(r.if_index, 0),
         }
         for r in rows
     ]
     items.sort(key=lambda x: x["if_index"])
     return {"items": items, "ts": ts.isoformat()}
+
+
+@router.get("/devices/{device_id}/interfaces/{if_index}/macs")
+def interface_macs(
+    device_id: int,
+    if_index: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """接口上学到的 MAC 地址列表（交换机 CAM 表快照）。"""
+    rows = (
+        db.query(InterfaceMac)
+        .filter(InterfaceMac.device_id == device_id, InterfaceMac.if_index == if_index)
+        .order_by(InterfaceMac.mac)
+        .all()
+    )
+    ts = rows[0].ts.isoformat() if rows else None
+    return {"items": [r.mac for r in rows], "total": len(rows), "ts": ts}
 
 
 @router.get("/devices/{device_id}/metrics")

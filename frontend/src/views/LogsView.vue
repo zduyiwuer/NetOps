@@ -62,7 +62,7 @@
           <el-button :icon="Search" @click="load">查询</el-button>
         </div>
 
-        <el-table v-loading="loading" :data="logs" size="small" stripe max-height="560">
+        <el-table border v-loading="loading" :data="logs" size="small" stripe max-height="560">
           <el-table-column label="级别" width="76" align="center">
             <template #default="{ row }">
               <el-tag :type="severityType(row.severity)" size="small" effect="plain">
@@ -112,7 +112,7 @@
         </div>
         <div class="table-card">
           <div class="card-title">设备日志 Top 10</div>
-          <el-table :data="deviceRows" size="small">
+          <el-table border :data="deviceRows" size="small">
             <el-table-column prop="name" label="设备" show-overflow-tooltip />
             <el-table-column prop="count" label="条数" width="80" align="right" />
           </el-table>
@@ -199,7 +199,7 @@
           <el-button size="small" @click="loadSystemLogs">查询</el-button>
           <span class="text-muted">记录端口占用、采集器启动失败等平台自身的运行问题</span>
         </div>
-        <el-table v-loading="sysLoading" :data="sysLogs" size="small" stripe empty-text="暂无系统日志">
+        <el-table border v-loading="sysLoading" :data="sysLogs" size="small" stripe empty-text="暂无系统日志">
           <el-table-column label="级别" width="80" align="center">
             <template #default="{ row }">
               <el-tag size="small" effect="dark" :type="sysLevelType(row.level)">

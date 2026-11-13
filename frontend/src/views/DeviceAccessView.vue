@@ -26,7 +26,7 @@
             </span>
           </div>
 
-          <el-table v-loading="loading" :data="accounts" size="small" stripe>
+          <el-table border v-loading="loading" :data="accounts" size="small" stripe>
             <el-table-column prop="device_name" label="设备" width="150" show-overflow-tooltip />
             <el-table-column prop="device_ip" label="管理IP" width="130" class-name="mono" />
             <el-table-column prop="username" label="用户名" width="140" class-name="mono" />
@@ -145,7 +145,7 @@
                 <el-option label="失败" value="fail" />
               </el-select>
             </div>
-            <el-table :data="sessions" size="small" stripe max-height="440">
+            <el-table border :data="sessions" size="small" stripe max-height="440">
               <el-table-column label="时间" width="150">
                 <template #default="{ row }">{{ fmtTime(row.created_at) }}</template>
               </el-table-column>

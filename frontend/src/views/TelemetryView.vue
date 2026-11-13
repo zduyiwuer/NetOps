@@ -56,7 +56,7 @@
     <div class="gap-row" style="margin-top: 12px">
       <div class="table-card" style="flex: 2; min-width: 560px">
         <div class="card-title">订阅配置</div>
-        <el-table :data="configs" size="small" stripe>
+        <el-table border :data="configs" size="small" stripe>
           <el-table-column prop="name" label="名称" min-width="140" show-overflow-tooltip />
           <el-table-column prop="device_name" label="设备" width="130" show-overflow-tooltip />
           <el-table-column label="模式" width="110" align="center">
@@ -111,7 +111,7 @@
 
       <div class="table-card" style="flex: 1; min-width: 340px">
         <div class="card-title">活跃会话</div>
-        <el-table :data="status.sessions || []" size="small" stripe max-height="300">
+        <el-table border :data="status.sessions || []" size="small" stripe max-height="300">
           <el-table-column prop="peer" label="对端" min-width="150" class-name="mono" show-overflow-tooltip />
           <el-table-column label="模式" width="100" align="center">
             <template #default="{ row }">
@@ -168,7 +168,7 @@
             新增路径
           </el-button>
         </div>
-        <el-table :data="filteredPaths" size="small" stripe max-height="360">
+        <el-table border :data="filteredPaths" size="small" stripe max-height="360">
           <el-table-column prop="path" label="遥测路径" min-width="260" class-name="mono" show-overflow-tooltip />
           <el-table-column prop="metric" label="平台指标" width="130" class-name="mono" show-overflow-tooltip />
           <el-table-column label="类型" width="90" align="center">
@@ -238,7 +238,7 @@
             清理样本
           </el-button>
         </div>
-        <el-table :data="samples" size="small" stripe max-height="360">
+        <el-table border :data="samples" size="small" stripe max-height="360">
           <el-table-column prop="ts" label="时间" width="150">
             <template #default="{ row }">{{ fmtTime(row.ts) }}</template>
           </el-table-column>

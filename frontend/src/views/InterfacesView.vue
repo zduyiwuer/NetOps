@@ -64,7 +64,7 @@
           />
           <el-button :icon="Search" @click="applyFilter">筛选</el-button>
         </div>
-        <el-table v-loading="loading" :data="filtered" size="small" stripe max-height="600">
+        <el-table border v-loading="loading" :data="filtered" size="small" stripe max-height="600">
           <el-table-column prop="device_name" label="设备" width="140" show-overflow-tooltip fixed />
           <el-table-column prop="store_name" label="门店" width="110" show-overflow-tooltip />
           <el-table-column prop="if_name" label="接口名" min-width="190" show-overflow-tooltip />

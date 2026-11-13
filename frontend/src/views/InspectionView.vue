@@ -13,7 +13,7 @@
     <el-tabs v-model="tab" @tab-change="onTabChange">
       <el-tab-pane label="巡检任务" name="tasks">
         <div class="table-card">
-          <el-table v-loading="loading" :data="tasks" size="small" stripe>
+          <el-table border v-loading="loading" :data="tasks" size="small" stripe>
             <el-table-column prop="name" label="任务名称" min-width="170" />
             <el-table-column prop="template_name" label="巡检模板" width="160" show-overflow-tooltip />
             <el-table-column label="范围" width="130">
@@ -95,7 +95,7 @@
             </el-button>
             <span class="text-muted">基线模板定义检查项与阈值，可按厂商定制</span>
           </div>
-          <el-table :data="templates" size="small" stripe>
+          <el-table border :data="templates" size="small" stripe>
             <el-table-column prop="name" label="模板名称" min-width="200" />
             <el-table-column label="适用厂商" width="140">
               <template #default="{ row }">
@@ -183,7 +183,7 @@
           <b :class="score >= 90 ? 'text-ok' : score >= 75 ? 'text-warn' : 'text-danger'">{{ score }}%</b>
         </div>
       </div>
-      <el-table :data="detailRows" size="small" stripe max-height="520">
+      <el-table border :data="detailRows" size="small" stripe max-height="520">
         <el-table-column prop="store_name" label="门店" width="110" show-overflow-tooltip />
         <el-table-column prop="device_name" label="设备" width="140" show-overflow-tooltip />
         <el-table-column prop="device_ip" label="IP" width="125" class-name="mono" />
@@ -203,7 +203,7 @@
 
     <!-- 检查项查看 -->
     <el-dialog v-model="itemsDialog" title="检查项定义" width="760px">
-      <el-table :data="currentItems" size="small" stripe>
+      <el-table border :data="currentItems" size="small" stripe>
         <el-table-column prop="title" label="检查项" width="140" />
         <el-table-column prop="metric" label="指标" width="120" class-name="mono" />
         <el-table-column label="基线" width="130">

@@ -66,7 +66,7 @@
             <el-radio-button value="dst">目的</el-radio-button>
           </el-radio-group>
         </div>
-        <el-table :data="talkers" size="small" stripe max-height="320">
+        <el-table border :data="talkers" size="small" stripe max-height="320">
           <el-table-column prop="ip" label="IP 地址" min-width="140" class-name="mono" />
           <el-table-column label="流量" width="110" align="right">
             <template #default="{ row }">{{ formatBytes(row.bytes_total) }}</template>
@@ -78,7 +78,7 @@
 
       <div class="table-card" style="flex: 1; min-width: 380px">
         <div class="card-title">Top 会话对</div>
-        <el-table :data="conversations" size="small" stripe max-height="320">
+        <el-table border :data="conversations" size="small" stripe max-height="320">
           <el-table-column label="源 → 目的" min-width="220">
             <template #default="{ row }">
               <span class="mono">{{ row.src_ip }}</span>
@@ -111,7 +111,7 @@
           @clear="loadFlows"
         />
       </div>
-      <el-table :data="flows" size="small" stripe max-height="420">
+      <el-table border :data="flows" size="small" stripe max-height="420">
         <el-table-column prop="device_name" label="设备" width="130" show-overflow-tooltip />
         <el-table-column prop="exporter_ip" label="导出源" width="120" class-name="mono" />
         <el-table-column label="版本" width="80" align="center">
@@ -155,7 +155,7 @@
           新增导出器
         </el-button>
       </div>
-      <el-table :data="exporters" size="small" stripe>
+      <el-table border :data="exporters" size="small" stripe>
         <el-table-column prop="name" label="名称" width="150" />
         <el-table-column prop="device_name" label="关联设备" width="140" show-overflow-tooltip />
         <el-table-column label="版本" width="100" align="center">

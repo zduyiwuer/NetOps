@@ -13,7 +13,7 @@
         <span>门店备份概览</span>
         <span class="text-muted" style="font-size: 12px">点击「下载」打包该门店所有设备的最新配置</span>
       </div>
-      <el-table :data="storeRows" size="small" stripe>
+      <el-table border :data="storeRows" size="small" stripe>
         <el-table-column prop="store_code" label="编码" width="100" class-name="mono" />
         <el-table-column prop="store_name" label="门店" min-width="130" />
         <el-table-column prop="region" label="区域" width="90" />
@@ -94,7 +94,7 @@
           <el-button :icon="Refresh" @click="load">查询</el-button>
         </div>
 
-        <el-table v-loading="loading" :data="backups" size="small" stripe max-height="440">
+        <el-table border v-loading="loading" :data="backups" size="small" stripe max-height="440">
           <el-table-column prop="device_name" label="设备" width="140" show-overflow-tooltip />
           <el-table-column prop="store_name" label="门店" width="110" show-overflow-tooltip />
           <el-table-column prop="device_ip" label="IP" width="120" class-name="mono" />

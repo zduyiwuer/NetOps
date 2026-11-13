@@ -91,6 +91,10 @@ class VendorProfile:
     version_cmd: List[str] = field(default_factory=list)
     interface_bulk: bool = True
 
+    # ---- 交换机专属 ----
+    # CAM/FDB 表（接口学到的 MAC 地址）走 SNMP
+    # （BRIDGE-MIB 的 dot1dTpFdbTable，几乎所有交换机都支持）
+    cam_snmp: bool = False
     # ---- 无线控制器专属 ----
     # 无线明细（AP / 客户端 / 漫游）走 SNMP 采集
     # （AIRESPACE-WIRELESS-MIB 的 bsnAPTable / bsnMobileStationTable 等）
@@ -147,6 +151,7 @@ VENDORS: Dict[str, VendorProfile] = {
     ),
     "cisco": VendorProfile(
         key="cisco",
+        cam_snmp=True,
         label="Cisco IOS/NXOS",
         netmiko_device_type="cisco_ios",
         category="交换机",

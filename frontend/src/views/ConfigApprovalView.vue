@@ -52,7 +52,7 @@
         <el-button :icon="Search" @click="load">查询</el-button>
       </div>
 
-      <el-table v-loading="loading" :data="changes" size="small" stripe>
+      <el-table border v-loading="loading" :data="changes" size="small" stripe>
         <el-table-column prop="ticket_no" label="工单号" width="145" class-name="mono" />
         <el-table-column prop="title" label="标题" min-width="180" show-overflow-tooltip />
         <el-table-column prop="device_name" label="设备" width="140" show-overflow-tooltip />

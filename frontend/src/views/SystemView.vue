@@ -36,7 +36,7 @@
 
         <div class="table-card" style="margin-top: 12px">
           <div class="card-title">采集通道状态</div>
-          <el-table :data="channelRows" size="small" stripe>
+          <el-table border :data="channelRows" size="small" stripe>
             <el-table-column prop="name" label="通道" width="140" />
             <el-table-column prop="desc" label="说明" min-width="320" show-overflow-tooltip />
             <el-table-column prop="status" label="状态" width="140" align="center">
@@ -57,7 +57,7 @@
               可直接修改调度策略、启停任务或立即执行，保存后立即生效
             </span>
           </div>
-          <el-table v-loading="loadingJobs" :data="jobs" size="small" stripe>
+          <el-table border v-loading="loadingJobs" :data="jobs" size="small" stripe>
             <el-table-column prop="name" label="任务名称" width="150" show-overflow-tooltip />
             <el-table-column prop="description" label="说明" min-width="200" show-overflow-tooltip />
             <el-table-column prop="category" label="分类" width="80" align="center">
@@ -145,7 +145,7 @@
             </el-button>
             <span class="text-muted">角色权限：管理员 &gt; 操作员 &gt; 只读</span>
           </div>
-          <el-table v-loading="loading" :data="users" size="small" stripe>
+          <el-table border v-loading="loading" :data="users" size="small" stripe>
             <el-table-column prop="username" label="用户名" width="140" />
             <el-table-column prop="display_name" label="姓名" width="130" />
             <el-table-column prop="email" label="邮箱" min-width="170" show-overflow-tooltip />
@@ -279,7 +279,7 @@
 
           <div class="table-card" style="flex: 1; min-width: 380px">
             <div class="card-title">登录审计</div>
-            <el-table :data="loginLogs" size="small" stripe max-height="420">
+            <el-table border :data="loginLogs" size="small" stripe max-height="420">
               <el-table-column prop="username" label="用户名" width="120" show-overflow-tooltip />
               <el-table-column label="结果" width="70" align="center">
                 <template #default="{ row }">
@@ -306,7 +306,7 @@
             <span>采集通道开关</span>
             <span class="text-muted" style="font-size: 12px">开关立即生效，无需重启服务</span>
           </div>
-          <el-table :data="collectorRows" size="small" stripe>
+          <el-table border :data="collectorRows" size="small" stripe>
             <el-table-column prop="name" label="采集通道" width="170" />
             <el-table-column prop="desc" label="说明" min-width="320" show-overflow-tooltip />
             <el-table-column prop="detail" label="详情" width="220" class-name="mono" />
@@ -401,7 +401,7 @@
             </span>
           </div>
 
-          <el-table
+          <el-table border
             v-loading="mibLoading"
             :data="mibFiles"
             size="small"
@@ -496,7 +496,7 @@
             </span>
           </div>
 
-          <el-table
+          <el-table border
             v-if="probeResult"
             v-loading="probing"
             :data="probeResult.items"
@@ -544,7 +544,7 @@
               {{ mibFilterName }}
             </el-tag>
           </div>
-          <el-table v-loading="mibNodeLoading" :data="mibNodes" size="small" stripe empty-text="没有匹配的指标">
+          <el-table border v-loading="mibNodeLoading" :data="mibNodes" size="small" stripe empty-text="没有匹配的指标">
             <el-table-column prop="name" label="指标名称" width="260" class-name="mono" show-overflow-tooltip />
             <el-table-column prop="oid" label="OID" width="270" class-name="mono" show-overflow-tooltip />
             <el-table-column prop="type_label" label="类型" width="80" align="center" />
@@ -676,7 +676,7 @@
               共 {{ vendorList.length }} 类设备，采集与巡检模板按厂商自动匹配
             </span>
           </div>
-          <el-table :data="vendorList" size="small" stripe>
+          <el-table border :data="vendorList" size="small" stripe>
             <el-table-column prop="label" label="厂商 / 设备类型" min-width="200" />
             <el-table-column prop="category" label="类别" width="120" align="center">
               <template #default="{ row }">
@@ -767,7 +767,7 @@
     </el-dialog>
 
     <el-dialog v-model="domainDialog" title="域用户列表" width="820px">
-      <el-table :data="domainUsers" size="small" stripe max-height="480">
+      <el-table border :data="domainUsers" size="small" stripe max-height="480">
         <el-table-column prop="username" label="域账号" width="140" />
         <el-table-column prop="display_name" label="姓名" width="140" show-overflow-tooltip />
         <el-table-column prop="email" label="邮箱" min-width="180" show-overflow-tooltip />

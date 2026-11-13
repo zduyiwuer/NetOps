@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Optional
 
 from sqlalchemy import (
     Boolean,
@@ -425,6 +426,26 @@ class MibNode(Base):
     description: Mapped[str] = mapped_column(Text, default="")
 
 
+class InterfaceMac(Base):
+    """接口上学到的 MAC 地址（交换机 CAM/FDB 表，SNMP 采集）。
+
+    数据来源 BRIDGE-MIB 的 dot1dTpFdbTable（MAC→bridge port）+
+    dot1dBasePortIfIndex（bridge port→接口号）。每次采集整体替换
+    最新快照，按接口查看该端口下挂了哪些设备。
+    """
+
+    __tablename__ = "interface_macs"
+    __table_args__ = (Index("ix_imac_dev", "device_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    device_id: Mapped[int] = mapped_column(
+        ForeignKey("devices.id", ondelete="CASCADE"), index=True
+    )
+    if_index: Mapped[int] = mapped_column(Integer, index=True)
+    mac: Mapped[str] = mapped_column(String(32), default="")
+    ts: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+
 class WirelessAP(Base):
     """无线控制器下挂的 AP（Access Point）。
 
@@ -487,6 +508,13 @@ class WirelessClient(Base):
     rssi: Mapped[int] = mapped_column(Integer, default=0)
     # 信噪比（dB，统计表 bsnMobileStationSnr）
     snr: Mapped[int] = mapped_column(Integer, default=0)
+    # 噪底（dBm）。SNMP 侧 AIRESPACE / CISCO-LWAPP 表实测不提供；
+    # 由 MDT 推送（需 WLC 订阅 wireless-rrm-oper 等含 noise-floor 的路径）
+    noise_floor: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # 匹配的发射 / 接收速率（Mbps，字符串如 "866.7"）。
+    # IOS XE 的 client-oper-data 无此字段，由 MDT 推送填充
+    tx_rate: Mapped[Optional[str]] = mapped_column(String(32), default="")
+    rx_rate: Mapped[Optional[str]] = mapped_column(String(32), default="")
     # 收发流量（统计表）
     bytes_in: Mapped[int] = mapped_column(Integer, default=0)
     bytes_out: Mapped[int] = mapped_column(Integer, default=0)

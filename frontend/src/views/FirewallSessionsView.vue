@@ -67,7 +67,7 @@
           数据来自设备采集时的厂商专属指标，采集后自动更新
         </span>
       </div>
-      <el-table
+      <el-table border
         v-loading="loading"
         :data="items"
         size="small"

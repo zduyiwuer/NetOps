@@ -247,6 +247,16 @@ class MdtDialoutServicer(mdt_pb2_grpc.gRPCMdtDialoutServicer):
                     except Exception as exc:
                         logger.exception("MDT 样本入库失败: %s", exc)
 
+                # 无线数据实时合并进 wireless_clients（telemetry 优先：
+                # 5-30 秒粒度比 SNMP 轮询新；失败不影响样本入库）
+                if did:
+                    try:
+                        await asyncio.to_thread(
+                            update_wireless_from_msg, msg, did
+                        )
+                    except Exception as exc:
+                        logger.debug("MDT 无线合并失败: %s", exc)
+
                 # 逐条回执：设备等确认后才发下一条（9800L 实测）
                 yield mdt_pb2.MdtDialoutReply(RespId=args.ReqId)
 
@@ -399,18 +409,10 @@ class MdtCollector:
             return False
 
     def status(self) -> Dict[str, Any]:
-        """活跃会话状态（供遥测页展示）。"""
-        return {
-            "sessions": [
-                {
-                    "peer": s["peer"],
-                    "received": s["received"],
-                    "last_ts": s["last_ts"].isoformat() if s["last_ts"] else None,
-                    "status": s["status"],
-                }
-                for s in self.sessions.values()
-            ]
-        }
+        """活跃会话状态（供遥测页展示）——委托给 servicer。"""
+        if self.servicer is None:
+            return {"sessions": []}
+        return self.servicer.status()
 
 
 class _RpcLogger(grpc.aio.ServerInterceptor):
@@ -483,3 +485,124 @@ class MdtCollectorServer:
 
     def status(self) -> Dict[str, Any]:
         return self.servicer.status() if self.servicer else {"sessions": []}
+
+
+# ---------------------------------------------------------------- 无线表合并
+def update_wireless_from_msg(msg: mdt_pb2.Telemetry, device_id) -> int:
+    """把 MDT 推送的无线数据实时合并进 wireless_clients 表。
+
+    MDT 是 5-30 秒粒度，比 SNMP 轮询（分钟级）新——telemetry 优先：
+    - client-oper-data（订阅 3）：ap-name / slot / radio 协议 / wlan-id
+    - location-oper-data（订阅 4）：keys.client-mac-addr +
+      radio-measurements.snr + sample.rssi-value（<-120 的值是设备
+      的「无效」标记，丢弃）
+    噪底 / 速率字段当前订阅集不提供（client-oper-data 的 YANG
+    无此字段）；设备加了 rrm-oper 等订阅后此处扩展键名即可填充。
+
+    返回更新的客户端数。
+    """
+    if not device_id or not msg.HasField("data_gpb"):
+        return 0
+    path = (msg.encoding_path or "").lower()
+    if "wireless" not in path:
+        return 0
+    is_location = "location" in path
+
+    def _leaves(field: mdt_pb2.TelemetryField, prefix: str) -> Dict[str, Any]:
+        """深度优先收集条目内全部叶子（路径相对条目容器）。"""
+        out: Dict[str, Any] = {}
+        for f in field.fields:
+            key = f"{prefix}.{f.name}" if prefix else f.name
+            if f.fields:
+                out.update(_leaves(f, key))
+            else:
+                v = _field_value(f)
+                if v is not None:
+                    out[key] = v
+        return out
+
+    # 数据树：.../<条目容器>/<重复条目>（client-oper-data 下是
+    # common-oper-data × N；location-rssi-metrics 下是 rssi-metric × N）
+    updates: List[Tuple[str, Dict[str, Any]]] = []
+    root = msg.data_gpb
+    # 找到重复条目的层级：任意层里同名兄弟 ≥2 的那一层
+    def _find_entries(field: mdt_pb2.TelemetryField) -> List[mdt_pb2.TelemetryField]:
+        names = [f.name for f in field.fields]
+        for name in set(names):
+            if names.count(name) >= 1:
+                group = [f for f in field.fields if f.name == name]
+                if len(group) >= 2 and all(g.fields for g in group):
+                    return group
+        for f in field.fields:
+            if f.fields:
+                sub = _find_entries(f)
+                if sub:
+                    return sub
+        return []
+
+    for entry in _find_entries(root)[:300]:
+        leaves = _leaves(entry, "")
+        if not leaves:
+            continue
+        mac = None
+        for k, v in leaves.items():
+            if ("client-mac" in k or "ms-mac" in k) and isinstance(v, str):
+                mac = v
+                break
+        if not mac:
+            continue
+        updates.append((mac, leaves))
+
+    if not updates:
+        return 0
+
+    from app.db.session import SessionLocal
+    from app.models.models import WirelessClient
+
+    touched = 0
+    db = SessionLocal()
+    try:
+        clients = {
+            c.mac: c
+            for c in db.query(WirelessClient)
+            .filter(WirelessClient.device_id == device_id)
+            .all()
+        }
+        for mac, leaves in updates:
+            c = clients.get(mac)
+            if c is None:
+                continue
+            changed = False
+            if is_location:
+                snr = leaves.get("radio-measurements.snr")
+                if isinstance(snr, (int, float)) and snr > -120 and snr != c.snr:
+                    c.snr = int(snr)
+                    changed = True
+                rssi = (
+                    leaves.get("radio-measurements.sample.rssi-value-a")
+                    or leaves.get("radio-measurements.sample.rssi-value-b")
+                )
+                if isinstance(rssi, (int, float)) and rssi > -120:
+                    if c.rssi != int(rssi):
+                        c.rssi = int(rssi)
+                        c.signal_strength = int(rssi)
+                        changed = True
+            else:
+                ap = leaves.get("ap-name")
+                if isinstance(ap, str) and ap and ap != c.ap_name:
+                    c.ap_name = ap
+                    changed = True
+                slot = leaves.get("ms-ap-slot-id")
+                if isinstance(slot, (int, float)) and int(slot) != c.slot:
+                    c.slot = int(slot)
+                    changed = True
+            if changed:
+                touched += 1
+        if touched:
+            db.commit()
+    except Exception as exc:
+        db.rollback()
+        logger.debug("MDT 无线合并失败: %s", exc)
+    finally:
+        db.close()
+    return touched

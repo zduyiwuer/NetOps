@@ -12,7 +12,7 @@
 
     <div class="gap-row">
       <div class="table-card" style="flex: 2; min-width: 520px">
-        <el-table v-loading="loading" :data="stores" size="small" stripe>
+        <el-table border v-loading="loading" :data="stores" size="small" stripe>
           <el-table-column prop="code" label="门店编码" width="110" class-name="mono" />
           <el-table-column prop="name" label="门店名称" min-width="140" />
           <el-table-column prop="region" label="区域" width="90" />
@@ -84,7 +84,7 @@
     </el-dialog>
 
     <el-dialog v-model="devicesDialog" :title="`${currentStore?.name || ''} 设备列表`" width="900px">
-      <el-table :data="storeDevices" size="small" stripe max-height="460">
+      <el-table border :data="storeDevices" size="small" stripe max-height="460">
         <el-table-column prop="name" label="设备名称" min-width="160" show-overflow-tooltip />
         <el-table-column prop="ip" label="管理IP" width="130" class-name="mono" />
         <el-table-column prop="vendor_label" label="厂商" width="130" />

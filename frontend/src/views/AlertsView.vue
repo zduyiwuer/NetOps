@@ -80,7 +80,7 @@
             </el-button>
           </div>
 
-          <el-table
+          <el-table border
             v-loading="loading"
             :data="events"
             size="small"
@@ -105,10 +105,10 @@
                   </div>
                   <div v-if="row.message" class="detail-message">{{ row.message }}</div>
                   <el-table
+                    border
                     v-if="row.detail?.items?.length"
                     :data="row.detail.items"
                     size="small"
-                    border
                     style="margin-top: 10px"
                   >
                     <el-table-column prop="interface" label="接口" min-width="190" show-overflow-tooltip />
@@ -232,21 +232,21 @@
         <div class="gap-row" style="margin-top: 12px">
           <div class="table-card" style="flex: 1; min-width: 320px">
             <div class="card-title">触发指标分布</div>
-            <el-table :data="metricRows" size="small">
+            <el-table border :data="metricRows" size="small">
               <el-table-column prop="metric" label="指标" />
               <el-table-column prop="count" label="次数" width="90" align="right" />
             </el-table>
           </div>
           <div class="table-card" style="flex: 1; min-width: 320px">
             <div class="card-title">高发设备 Top 10</div>
-            <el-table :data="deviceRows" size="small">
+            <el-table border :data="deviceRows" size="small">
               <el-table-column prop="name" label="设备" show-overflow-tooltip />
               <el-table-column prop="count" label="次数" width="90" align="right" />
             </el-table>
           </div>
           <div class="table-card" style="flex: 1; min-width: 320px">
             <div class="card-title">门店告警分布</div>
-            <el-table :data="storeRows" size="small">
+            <el-table border :data="storeRows" size="small">
               <el-table-column prop="name" label="门店" show-overflow-tooltip />
               <el-table-column prop="count" label="次数" width="90" align="right" />
             </el-table>
@@ -262,7 +262,7 @@
             </el-button>
             <span class="text-muted">规则在每次采集后自动评估，条件满足即触发告警</span>
           </div>
-          <el-table :data="rules" size="small" stripe>
+          <el-table border :data="rules" size="small" stripe>
             <el-table-column prop="name" label="规则名称" min-width="160" />
             <el-table-column label="作用范围" width="150">
               <template #default="{ row }">
@@ -320,7 +320,7 @@
             </el-button>
             <span class="text-muted">支持 Webhook、企业微信机器人、钉钉机器人、邮件 SMTP</span>
           </div>
-          <el-table :data="channels" size="small" stripe>
+          <el-table border :data="channels" size="small" stripe>
             <el-table-column prop="name" label="渠道名称" width="150" />
             <el-table-column label="类型" width="120">
               <template #default="{ row }">

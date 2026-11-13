@@ -156,7 +156,7 @@
             />
           </div>
         </div>
-        <el-table :data="filteredInterfaces" size="small" stripe max-height="380" empty-text="没有符合筛选条件的接口">
+        <el-table border :data="filteredInterfaces" size="small" stripe max-height="380" empty-text="没有符合筛选条件的接口">
           <el-table-column prop="if_index" label="Index" width="65" />
           <el-table-column prop="if_name" label="接口名" min-width="180" show-overflow-tooltip />
           <el-table-column label="速率" width="90" align="right">
@@ -191,8 +191,34 @@
               </span>
             </template>
           </el-table-column>
+          <el-table-column label="MAC" width="90" align="center">
+            <template #default="{ row }">
+              <el-link
+                v-if="row.mac_count > 0"
+                type="primary"
+                :underline="false"
+                @click="showIfMacs(row)"
+              >
+                {{ row.mac_count }} 个
+              </el-link>
+              <span v-else class="text-muted">-</span>
+            </template>
+          </el-table-column>
         </el-table>
       </div>
+
+      <el-dialog v-model="ifMacDlg.visible" :title="ifMacDlg.title" width="480px">
+        <div v-if="ifMacDlg.loading" v-loading="true" style="min-height: 120px" />
+        <template v-else>
+          <div class="text-muted" style="margin-bottom: 8px; font-size: 12px">
+            该接口学到的 MAC 地址（CAM 表快照{{ ifMacDlg.ts ? ' · ' + ifMacDlg.ts : '' }}）
+          </div>
+          <div class="mac-list">
+            <span v-for="m in ifMacDlg.macs" :key="m" class="mono mac-item">{{ m }}</span>
+          </div>
+          <div v-if="!ifMacDlg.macs.length" class="text-muted">（无 MAC 记录）</div>
+        </template>
+      </el-dialog>
 
       <div class="table-card" style="flex: 1; min-width: 320px">
         <div class="card-title">设备信息</div>
@@ -231,7 +257,7 @@
             <el-button size="small" @click="loadWireless">查询</el-button>
           </div>
         </div>
-        <el-table
+        <el-table border
           v-loading="wirelessLoading"
           :data="wirelessAps"
           size="small"
@@ -312,7 +338,7 @@
             <el-button size="small" @click="loadWireless">查询</el-button>
           </div>
         </div>
-        <el-table
+        <el-table border
           v-loading="wirelessLoading"
           :data="wirelessClients"
           size="small"
@@ -337,6 +363,21 @@
           <el-table-column label="SNR" width="70" align="center">
             <template #default="{ row }">
               <span class="mono">{{ row.snr ? row.snr + ' dB' : '-' }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="噪底" width="80" align="center">
+            <template #default="{ row }">
+              <span class="mono">{{ row.noise_floor != null ? row.noise_floor + ' dBm' : '-' }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="发射速率" width="90" align="center">
+            <template #default="{ row }">
+              <span class="mono">{{ row.tx_rate || '-' }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="接收速率" width="90" align="center">
+            <template #default="{ row }">
+              <span class="mono">{{ row.rx_rate || '-' }}</span>
             </template>
           </el-table-column>
           <el-table-column label="已收 / 已发" width="150" align="right">
@@ -381,7 +422,7 @@
             <el-button size="small" @click="loadRoaming">查询</el-button>
           </div>
         </div>
-        <el-table
+        <el-table border
           v-loading="roamingLoading"
           :data="filteredRoaming"
           size="small"
@@ -678,6 +719,25 @@ const ifaceTrendOption = computed(() => {
   }
 })
 
+// ---------------------------------------------------------------- 接口 MAC
+const ifMacDlg = ref({ visible: false, loading: false, title: '', macs: [], ts: '' })
+
+async function showIfMacs(row) {
+  ifMacDlg.value = {
+    visible: true, loading: true, title: `${row.if_name || row.if_descr || `接口 ${row.if_index}`} 的 MAC`,
+    macs: [], ts: '',
+  }
+  try {
+    const res = await monitorApi.interfaceMacs(deviceId.value, row.if_index)
+    ifMacDlg.value.macs = res.items || []
+    ifMacDlg.value.ts = (res.ts || '').replace('T', ' ').slice(0, 19)
+  } catch (e) {
+    ifMacDlg.value.macs = []
+  } finally {
+    ifMacDlg.value.loading = false
+  }
+}
+
 // ---------------------------------------------------------------- 无线数据
 const wirelessAps = ref([])
 const wirelessClients = ref([])
@@ -857,5 +917,20 @@ onUnmounted(() => window.removeEventListener('netops:refresh', loadAll))
 .card-title {
   flex-wrap: wrap;
   gap: 8px;
+}
+
+/* 接口 MAC 列表弹窗 */
+.mac-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.mac-item {
+  display: inline-block;
+  padding: 2px 8px;
+  border: 1px solid var(--el-border-color);
+  border-radius: 4px;
+  font-size: 12px;
+  background: var(--el-fill-color-light);
 }
 </style>

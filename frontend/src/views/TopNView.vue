@@ -35,7 +35,7 @@
     <div class="gap-row" style="margin-top: 12px">
       <div class="table-card" style="flex: 2; min-width: 520px">
         <div class="card-title">流量排行明细</div>
-        <el-table :data="topn" size="small" stripe max-height="420">
+        <el-table border :data="topn" size="small" stripe max-height="420">
           <el-table-column type="index" label="#" width="55" />
           <el-table-column prop="device_name" label="设备" min-width="140" show-overflow-tooltip />
           <el-table-column prop="target" label="接口 / 目标" min-width="180" show-overflow-tooltip />
@@ -56,7 +56,7 @@
 
       <div class="table-card" style="flex: 1; min-width: 340px">
         <div class="card-title">错包 Top 10</div>
-        <el-table :data="errors" size="small" stripe max-height="420">
+        <el-table border :data="errors" size="small" stripe max-height="420">
           <el-table-column prop="device_name" label="设备" min-width="120" show-overflow-tooltip />
           <el-table-column prop="target" label="接口" min-width="150" show-overflow-tooltip />
           <el-table-column label="错包总数" width="100" align="right">

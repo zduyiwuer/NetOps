@@ -62,7 +62,7 @@
             <el-button :icon="Search" @click="load">查询</el-button>
           </div>
 
-          <el-table v-loading="loading" :data="items" size="small" stripe max-height="520">
+          <el-table border v-loading="loading" :data="items" size="small" stripe max-height="520">
             <el-table-column label="时间" width="160">
               <template #default="{ row }">{{ fmtTime(row.created_at) }}</template>
             </el-table-column>
@@ -89,7 +89,7 @@
 
       <el-tab-pane label="登录审计" name="login">
         <div class="table-card">
-          <el-table :data="loginLogs" size="small" stripe max-height="600">
+          <el-table border :data="loginLogs" size="small" stripe max-height="600">
             <el-table-column label="时间" width="160">
               <template #default="{ row }">{{ fmtTime(row.created_at) }}</template>
             </el-table-column>

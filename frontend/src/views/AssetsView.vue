@@ -66,7 +66,7 @@
         <el-button :icon="Search" @click="load">查询</el-button>
       </div>
 
-      <el-table v-loading="loading" :data="assets" size="small" stripe>
+      <el-table border v-loading="loading" :data="assets" size="small" stripe>
         <el-table-column prop="asset_tag" label="资产编号" width="130" class-name="mono" />
         <el-table-column prop="name" label="设备名称" min-width="150" show-overflow-tooltip />
         <el-table-column prop="ip" label="管理IP" width="125" class-name="mono" />

@@ -90,7 +90,7 @@
             <span>最近告警</span>
             <el-link type="primary" :underline="false" @click="$router.push('/alerts')">查看全部</el-link>
           </div>
-          <el-table :data="overview.recent_alerts || []" size="small" :max-height="280">
+          <el-table border :data="overview.recent_alerts || []" size="small" :max-height="280">
             <el-table-column label="级别" width="80">
               <template #default="{ row }">
                 <el-tag :type="severityType(row.severity)" size="small" effect="plain">
@@ -111,7 +111,7 @@
             <span>门店设备分布</span>
             <el-link type="primary" :underline="false" @click="$router.push('/stores')">门店管理</el-link>
           </div>
-          <el-table :data="storeRows" size="small" :max-height="280">
+          <el-table border :data="storeRows" size="small" :max-height="280">
             <el-table-column prop="name" label="门店" />
             <el-table-column prop="count" label="设备数" width="90" align="right" />
             <el-table-column label="占比" width="130">
@@ -129,7 +129,7 @@
       <el-alert type="info" :closable="false" show-icon style="margin-bottom: 14px">
         <template #title>勾选需要显示的模块，调整顺序与宽度，配置保存在本地浏览器</template>
       </el-alert>
-      <el-table :data="dashStore.allWidgets" size="small">
+      <el-table border :data="dashStore.allWidgets" size="small">
         <el-table-column label="显示" width="70" align="center">
           <template #default="{ row }">
             <el-switch

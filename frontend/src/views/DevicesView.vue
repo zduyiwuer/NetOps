@@ -53,7 +53,7 @@
         <el-button :icon="RefreshLeft" @click="resetQuery">重置</el-button>
       </div>
 
-      <el-table v-loading="loading" :data="items" size="small" stripe>
+      <el-table border v-loading="loading" :data="items" size="small" stripe>
         <!-- 展开行：位置 / 资产编号 / 序列号等低频字段放这里，避免主表格横向滚动 -->
         <el-table-column type="expand" width="38">
           <template #default="{ row }">
@@ -446,7 +446,7 @@
         </div>
       </div>
 
-      <el-table v-if="probeResult" :data="probeResult.items" size="small" stripe max-height="420">
+      <el-table border v-if="probeResult" :data="probeResult.items" size="small" stripe max-height="420">
         <el-table-column prop="name" label="设备名称" min-width="160" show-overflow-tooltip />
         <el-table-column prop="ip" label="管理 IP" width="140" class-name="mono" />
         <el-table-column label="探测结果" width="100" align="center">

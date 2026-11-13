@@ -46,6 +46,48 @@ def get_scheduler() -> AsyncIOScheduler:
 
 
 # ---------------------------------------------------------------- 采集
+async def _telemetry_liveness(device, db) -> Optional[DeviceSample]:
+    """纯遥测设备的在线判定：最近 10 分钟内有样本即在线。
+
+    写一行仅含可达性的指标（设备信息由遥测推送归一化入库），
+    避免离线告警把关了 SNMP 轮询的设备误报成离线。
+    """
+    from app.models.models import TelemetrySample
+
+    try:
+        since = datetime.now() - timedelta(minutes=10)
+        fresh = (
+            db.query(TelemetrySample.id)
+            .filter(
+                TelemetrySample.device_id == device.id,
+                TelemetrySample.ts >= since,
+            )
+            .first()
+        )
+        online = fresh is not None
+        if online:
+            device.last_seen = datetime.now()
+            device.status = "online"
+        else:
+            device.status = "offline"
+        db.add(
+            DeviceMetric(
+                device_id=device.id,
+                ts=datetime.now(),
+                reachability=online,
+            )
+        )
+        db.commit()
+        logger.debug(
+            "设备 %s 纯遥测模式：%s",
+            device.name, "在线（近 10 分钟有样本）" if online else "离线",
+        )
+    except Exception as exc:
+        db.rollback()
+        logger.warning("遥测在线判定失败 device=%s: %s", device.id, exc)
+    return None
+
+
 async def collect_device(device_id: int) -> Optional[DeviceSample]:
     """采集单台设备并写入指标表。"""
     global _overall_semaphore
@@ -57,10 +99,11 @@ async def collect_device(device_id: int) -> Optional[DeviceSample]:
         device = db.get(Device, device_id)
         if device is None or not device.enabled:
             return None
-        # 关闭 SNMP 轮询的设备改由 Telemetry 推送供数，不参与轮询
+        # 关闭 SNMP 轮询的设备改由 Telemetry 推送供数，不参与轮询——
+        # 在线状态由「最近 10 分钟内是否有遥测样本」判定，
+        # 落一行 reachability 指标保证趋势 / 离线告警不误报
         if not device.use_snmp:
-            logger.debug("设备 %s 已关闭 SNMP 轮询，跳过", device.name)
-            return None
+            return await _telemetry_liveness(device, db)
 
         async with _lock_for(device_id):
             async with _overall_semaphore:

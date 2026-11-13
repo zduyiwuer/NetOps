@@ -53,7 +53,7 @@
 
       <div class="table-card" style="flex: 1; min-width: 380px">
         <div class="card-title">邻居关系明细</div>
-        <el-table :data="neighbors" size="small" stripe max-height="480">
+        <el-table border :data="neighbors" size="small" stripe max-height="480">
           <el-table-column prop="local_device_name" label="本地设备" width="130" show-overflow-tooltip />
           <el-table-column prop="local_interface" label="本地接口" width="130" show-overflow-tooltip />
           <el-table-column prop="remote_device" label="远端设备" min-width="130" show-overflow-tooltip />
