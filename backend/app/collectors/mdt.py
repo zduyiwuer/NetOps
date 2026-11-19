@@ -774,18 +774,45 @@ def update_wireless_from_msg(msg: mdt_pb2.Telemetry, device_id) -> int:
                         "MDT CDP 地址: ap=%s ip=%s",
                         ap_name[:20], str(leaves.get("cdp-cache-ap-address"))[:20],
                     )
-                # rrm-measurement 订阅（17.9 实测）：noise 键是噪底
-                # （dBm），chan 是信道——另有功率 / 利用率等
-                nv = _to_float_safe(leaves.get("noise"))
+                # rrm-measurement 订阅：噪底 / 信道键有两种形态——
+                # 扁平（noise / chan）与嵌套
+                # （noise.noise.noise-data.noise / *.chan，fsbcwlc
+                # 17.9 实测），两种都试
+                nv = _to_float_safe(
+                    leaves.get("noise.noise.noise-data.noise")
+                    if "noise.noise.noise-data.noise" in leaves
+                    else leaves.get("noise")
+                )
                 if nv is not None and -130 < nv < 0:
                     if ap_row.noise_floor != int(nv):
                         ap_row.noise_floor = int(nv)
                 # rrm-measurement 的 chan 是该 radio 当前信道——
                 # 顺带刷新该 AP 该 slot 下全部客户端的信道 / 噪底
                 # （客户端按 AP 名 + slot 关联）
-                if "rrm-measurement" in path:
-                    rrm_chan = _to_float_safe(leaves.get("chan"))
+                # 判定按条目特征而非批路径：radio 数据常在**主
+                # access-point 批**里推送（path 不含 radio-oper-data）
+                is_radio_entry = (
+                    "rrm-measurement" in path
+                    or "radio-oper-data" in path
+                    or "curr-freq" in leaves
+                )
+                if is_radio_entry:
+                    # rrm-measurement 的 chan 或 radio-oper-data 的
+                    # curr-freq 都代表当前信道
+                    rrm_chan = _to_float_safe(
+                        leaves.get("noise.noise.noise-data.chan")
+                        if "noise.noise.noise-data.chan" in leaves
+                        else (
+                            leaves.get("chan")
+                            if "chan" in leaves
+                            else leaves.get("curr-freq")
+                        )
+                    )
                     rrm_slot = _to_float_safe(leaves.get("radio-slot-id"))
+                    logger.debug(
+                        "MDT rrm 填客户端: ap=%s slot=%s chan=%s",
+                        ap_row.name[:20], rrm_slot, rrm_chan,
+                    )
                     if rrm_chan is not None and rrm_chan > 0:
                         affected = (
                             db.query(WirelessClient)
@@ -795,6 +822,7 @@ def update_wireless_from_msg(msg: mdt_pb2.Telemetry, device_id) -> int:
                             )
                             .all()
                         )
+                        # 保留 debug 级填充日志（下次排查 radio 条目用）
                         for cl in affected:
                             cl_slot = _to_float_safe(cl.slot) or 0
                             if rrm_slot is None or int(cl_slot) == int(rrm_slot):
@@ -832,9 +860,13 @@ def update_wireless_from_msg(msg: mdt_pb2.Telemetry, device_id) -> int:
         }
         for mac, leaves in updates:
             # 纯遥测设备没有 SNMP 基础行——遇到新 MAC 直接建行
-            # （upsert），否则合并器只更新已有行、详情页永远空
+            # （upsert），否则合并器只更新已有行、详情页永远空。
+            # sisf 批例外：SISF 是全网 IP↔MAC 绑定库（含有线），
+            # 不能按它建无线客户端行——只更新已有行
             c = clients.get(mac)
             if c is None:
+                if is_sisf:
+                    continue
                 c = WirelessClient(device_id=device_id, mac=mac, ts=now)
                 clients[mac] = c
                 db.add(c)
@@ -928,24 +960,9 @@ def update_wireless_from_msg(msg: mdt_pb2.Telemetry, device_id) -> int:
         if touched:
             db.commit()
 
-        # client-oper-data 主批是**全量快照**（设备每批推全部在线
-        # 客户端）——删除不在本批的遥测行，保证数量与控制器一致；
-        # SNMP 来源行由 SNMP 轮询自己同步，不动
-        is_main_client_batch = (
-            "client-oper" in path
-            and not is_sisf
-            and "traffic-stats" not in path
-            and "dot11-oper" not in path
-            and updates
-        )
-        if is_main_client_batch:
-            batch_macs = {m for m, _ in updates}
-            db.query(WirelessClient).filter(
-                WirelessClient.device_id == device_id,
-                WirelessClient.source == "telemetry",
-                WirelessClient.mac.notin_(batch_macs),
-            ).delete(synchronize_session=False)
-            db.commit()
+        # 客户端数量同步改由调度任务做过期删除（见
+        # cleanup_wireless_clients）：单条 gRPC 消息只是批的**分片**，
+        # 不能当全量快照用（实测会删过头 39→1）
     except Exception as exc:
         db.rollback()
         logger.exception("MDT 无线合并失败: %s", exc)
@@ -955,5 +972,11 @@ def update_wireless_from_msg(msg: mdt_pb2.Telemetry, device_id) -> int:
         logger.info(
             "MDT 无线合并: path=%s 条目=%d 更新=%d",
             (msg.encoding_path or "")[:60], len(updates), touched,
+        )
+    else:
+        # 定位失败 / 值全部无效也要可见（radio-oper 曾静默丢失）
+        logger.info(
+            "MDT 无线合并: path=%s ap条目=%d 更新=0",
+            (msg.encoding_path or "")[:60], len(ap_updates),
         )
     return touched

@@ -487,7 +487,35 @@ async def _job_cleanup_telemetry_samples() -> None:
         db.close()
 
 
+async def _job_cleanup_wireless_clients() -> None:
+    """无线客户端过期删除：遥测不再更新的行视为已下线。"""
+    from app.models.models import WirelessClient
+    db = SessionLocal()
+    try:
+        cutoff = datetime.now() - timedelta(minutes=15)
+        db.query(WirelessClient).filter(
+            WirelessClient.source == "telemetry",
+            WirelessClient.ts < cutoff,
+        ).delete(synchronize_session=False)
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        logger.warning("无线客户端过期清理失败: %s", exc)
+    finally:
+        db.close()
+
+
 JOB_REGISTRY: List[Dict[str, Any]] = [
+    {
+        "job_id": "cleanup_wireless_clients",
+        "name": "无线客户端过期清理",
+        "description": "删除 15 分钟未更新的遥测来源客户端行（已下线）",
+        "category": "维护",
+        "func": _job_cleanup_wireless_clients,
+        "default_interval": 300,
+        "default_cron": "",
+        "misfire_grace_time": 120,
+    },
     {
         "job_id": "cleanup_telemetry_samples",
         "name": "遥测样本清理",
