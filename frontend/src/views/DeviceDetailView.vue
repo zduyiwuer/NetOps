@@ -257,7 +257,7 @@
             <el-button size="small" @click="loadWireless">查询</el-button>
           </div>
         </div>
-        <el-table border
+        <el-table border class="ap-table"
           v-loading="wirelessLoading"
           :data="wirelessAps"
           size="small"
@@ -285,11 +285,6 @@
 
 
           <el-table-column prop="serial_number" label="序列号" width="130" class-name="mono" show-overflow-tooltip />
-          <el-table-column prop="sw_version" label="软件版本" width="95" align="center" show-overflow-tooltip>
-            <template #default="{ row }">
-              <span class="mono">{{ row.sw_version || '-' }}</span>
-            </template>
-          </el-table-column>
           <el-table-column prop="sw_version" label="软件版本" width="95" align="center" show-overflow-tooltip>
             <template #default="{ row }">
               <span class="mono">{{ row.sw_version || '-' }}</span>
@@ -356,7 +351,7 @@
             <el-button size="small" @click="loadWireless">查询</el-button>
           </div>
         </div>
-        <el-table border
+        <el-table border class="ap-table"
           v-loading="wirelessLoading"
           :data="wirelessClients"
           size="small"
@@ -1044,4 +1039,10 @@ onUnmounted(() => window.removeEventListener('netops:refresh', loadAll))
   font-size: 12px;
   background: var(--el-fill-color-light);
 }
+/* AP 表行间距紧凑 */
+.ap-table :deep(.cell) { padding: 2px 8px; line-height: 1.3; }
+.ap-table :deep(td.el-table__cell) { padding: 4px 0; }
+/* AP 表行间距紧凑 */
+.ap-table :deep(.cell) { padding: 2px 8px; line-height: 1.3; }
+.ap-table :deep(td.el-table__cell) { padding: 4px 0; }
 </style>
