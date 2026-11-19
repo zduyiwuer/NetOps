@@ -720,7 +720,7 @@ def update_wireless_from_msg(msg: mdt_pb2.Telemetry, device_id) -> int:
         return 0
 
     from app.db.session import SessionLocal
-    from app.models.models import WirelessAP, WirelessClient
+    from app.models.models import WirelessAP, WirelessClient, WirelessRoaming
 
     touched = 0
     db = SessionLocal()
@@ -939,12 +939,17 @@ def update_wireless_from_msg(msg: mdt_pb2.Telemetry, device_id) -> int:
             # sisf 批例外：SISF 是全网 IP↔MAC 绑定库（含有线），
             # 不能按它建无线客户端行——只更新已有行
             c = clients.get(mac)
+            is_new = c is None
             if c is None:
                 if is_sisf:
                     continue
                 c = WirelessClient(device_id=device_id, mac=mac, ts=now)
                 clients[mac] = c
                 db.add(c)
+            # 漫游检测：AP 变化（旧值非空且与新值不同）即记录
+            old_ap = c.ap_name or ""
+            old_bssid = c.bssid or ""
+            old_channel = c.channel or 0
             changed = False
             if is_location:
                 snr = leaves.get("radio-measurements.snr")
@@ -1025,6 +1030,28 @@ def update_wireless_from_msg(msg: mdt_pb2.Telemetry, device_id) -> int:
                         changed = True
                 # 信道：客户端条目不含信道（由 AP radio 决定），
                 # wlan-id / vlan 类数值字段暂无展示列，忽略
+            # 漫游事件：AP 切换（客户端在不同 AP 间移动）
+            if (
+                not is_new
+                and old_ap
+                and c.ap_name
+                and c.ap_name != old_ap
+            ):
+                db.add(
+                    WirelessRoaming(
+                        device_id=device_id,
+                        mac=c.mac,
+                        from_ap=old_ap,
+                        to_ap=c.ap_name,
+                        from_bssid=old_bssid,
+                        to_bssid=c.bssid or "",
+                        from_channel=old_channel,
+                        to_channel=c.channel or 0,
+                        rssi=c.rssi or 0,
+                        snr=c.snr or 0,
+                        ts=now,
+                    )
+                )
             # 遥测来源：SNMP 轮询不再覆盖此行的遥测字段
             c.source = "telemetry"
             if changed:

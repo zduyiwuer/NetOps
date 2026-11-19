@@ -670,6 +670,26 @@ def list_wireless_aps(
     }
 
 
+@router.delete("/devices/{device_id}/wireless/clients/{mac}")
+def delete_wireless_client(
+    device_id: int,
+    mac: str,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    """删除指定无线客户端行（误建的行/不存在的客户端）。"""
+    n = (
+        db.query(WirelessClient)
+        .filter(
+            WirelessClient.device_id == device_id,
+            WirelessClient.mac == mac,
+        )
+        .delete(synchronize_session=False)
+    )
+    db.commit()
+    return {"ok": True, "deleted": n}
+
+
 @router.get("/devices/{device_id}/wireless/clients")
 def list_wireless_clients(
     device_id: int,

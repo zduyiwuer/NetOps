@@ -267,7 +267,7 @@
         >
           <el-table-column prop="name" label="AP 名称" min-width="130" show-overflow-tooltip />
           <el-table-column prop="model" label="型号" width="110" show-overflow-tooltip />
-          <el-table-column prop="ip" label="IP 地址" width="135" class-name="mono" show-overflow-tooltip />
+          <el-table-column prop="ip" label="IP 地址" width="150" class-name="mono" show-overflow-tooltip />
           <el-table-column prop="client_count" label="客户端数" width="90" align="center" sortable>
             <template #default="{ row }">
               <el-tag v-if="row.client_count > 0" size="small" effect="plain" type="success">
@@ -364,8 +364,8 @@
           max-height="420"
           empty-text="暂无客户端数据"
         >
-          <el-table-column prop="mac" label="MAC 地址" width="135" class-name="mono" show-overflow-tooltip />
-          <el-table-column prop="ip" label="IP 地址" width="130" class-name="mono" show-overflow-tooltip />
+          <el-table-column prop="mac" label="MAC 地址" width="155" class-name="mono" show-overflow-tooltip />
+          <el-table-column prop="ip" label="IP 地址" width="150" class-name="mono" show-overflow-tooltip />
           <el-table-column prop="ap_name" label="所属 AP" min-width="115" show-overflow-tooltip />
           <el-table-column prop="ssid" label="SSID" min-width="130" show-overflow-tooltip />
           <el-table-column label="信道" width="70" align="center">
@@ -460,7 +460,7 @@
           <el-table-column prop="ts" label="时间" width="160">
             <template #default="{ row }">{{ (row.ts || '').replace('T', ' ').slice(0, 19) }}</template>
           </el-table-column>
-          <el-table-column prop="mac" label="客户端 MAC" width="135" class-name="mono" show-overflow-tooltip />
+          <el-table-column prop="mac" label="客户端 MAC" width="155" class-name="mono" show-overflow-tooltip />
           <el-table-column label="漫游路径" min-width="280">
             <template #default="{ row }">
               <span class="text-muted">{{ row.from_ap || row.from_bssid }}</span>
