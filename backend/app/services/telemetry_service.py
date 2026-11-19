@@ -183,6 +183,13 @@ def store_telemetry_samples(
             mem_usage = None
             mem_used_mb = None
             mem_total_mb = None
+            # 合理性下限：WLC/网络设备内存至少 64MB（GB 级常见）——
+            # AP 的内存统计等误匹配（如 6MB 的 total）直接丢弃
+            if mem_total is not None and mem_total < 64 * 1024 * 1024:
+                mem_total = None
+                mem_used = None
+                mem_free = None
+                mem_avail = None
             if mem_total and mem_used is not None:
                 mem_total_mb = mem_total / (1024 * 1024)
                 mem_used_mb = mem_used / (1024 * 1024)
