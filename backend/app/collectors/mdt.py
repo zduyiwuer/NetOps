@@ -165,8 +165,8 @@ def telemetry_to_samples(msg: mdt_pb2.Telemetry) -> List[Dict[str, Any]]:
 
     _walk(msg.data_gpb, "", "")
     # 上限保护：一条消息最多取 2000 个叶子（1MB 级消息可能上万个）
-    # 不设上限：单批可能 2000+ 样本（大 xpath 全树），全部返回
-    return samples[:20000]
+    # 全量返回，不设上限
+    return samples
 
 
 # ---------------------------------------------------------------- 服务端
@@ -281,7 +281,26 @@ class MdtDialoutServicer(mdt_pb2_grpc.gRPCMdtDialoutServicer):
                             update_wireless_from_msg, msg, did
                         )
                     except Exception as exc:
-                        logger.exception("MDT 无线合并调度失败: %s", exc)
+                        # SQLite 写锁偶发冲突（大样本入库占锁）——
+                        # 等 1 秒重试一次，通常即可成功
+                        if "database is locked" in str(exc):
+                            await asyncio.sleep(1)
+                            try:
+                                await asyncio.to_thread(
+                                    update_wireless_from_msg, msg, did
+                                )
+                                logger.info(
+                                    "MDT 无线合并锁重试成功: %s",
+                                    (msg.encoding_path or "")[:40],
+                                )
+                            except Exception as exc2:
+                                logger.exception(
+                                    "MDT 无线合并重试仍失败: %s", exc2
+                                )
+                        else:
+                            logger.exception(
+                                "MDT 无线合并调度失败: %s", exc
+                            )
                 else:
                     logger.info("MDT 未匹配到设备，跳过无线合并（node=%s）", msg.node_id_str)
 
@@ -334,6 +353,15 @@ class MdtDialoutServicer(mdt_pb2_grpc.gRPCMdtDialoutServicer):
                         _show(f.fields, depth + 1, max_depth, limit)
 
             _show(msg.data_gpb.fields)
+            # 大 content 的子名分布统计（定位条目结构用）
+            for top in msg.data_gpb.fields:
+                if top.name == "content" and len(top.fields) > 100:
+                    from collections import Counter as _C
+                    dist = _C(f.name for f in top.fields)
+                    logger.info(
+                        "MDT DEBUG 大content子名分布: %s",
+                        dict(sorted(dist.items(), key=lambda x: -x[1])),
+                    )
         except Exception as exc:
             logger.debug("MDT dump 失败: %s", exc)
 
@@ -569,10 +597,16 @@ def update_wireless_from_msg(msg: mdt_pb2.Telemetry, device_id) -> int:
         names = [f.name for f in field.fields]
         for name in set(names):
             group = [f for f in field.fields if f.name == name]
-            # ≥2 个同名兄弟才算列表；只有 1 个时也要（设备上只有
-            # 1 个客户端的场景），但要排除 keys 这类单例键容器
-            if len(group) >= 1 and all(g.fields for g in group) and name not in (
-                "keys", "content", "oper-data", "capwap-data",
+            # 重复组（同名兄弟 ≥2）直接是列表条目——不要排除
+            # capwap-data/oper-data！主批里它们是 31 台 AP 的完整
+            # 资产数据（之前无条件排除导致 model/serial 全丢）
+            if len(group) >= 2 and all(g.fields for g in group):
+                groups.append(group)
+            # 单例：设备只有 1 个条目时也要；排除单例键容器
+            elif (
+                len(group) == 1
+                and group[0].fields
+                and name not in ("keys", "content")
             ):
                 groups.append(group)
         # 深一层找（keys / content 等单例容器要穿透）
@@ -695,7 +729,10 @@ def update_wireless_from_msg(msg: mdt_pb2.Telemetry, device_id) -> int:
                 for a in aps.values()
                 if a.radio_mac
             }
-            for ap_name, leaves in ap_updates[:200]:
+            # 不设条目上限：主批 AP 条目可达 300+（31 capwap + 62 radio +
+            # 62 stats + 31 name-map 等），[:200] 会把 capwap 资产数据截掉
+            ap_client_counts: Dict[str, int] = {}
+            for ap_name, leaves in ap_updates[:5000]:
                 if ap_name.startswith("__mac__"):
                     # rrm / radio-oper 条目只有 wtp-mac——
                     # 先按 wtp_mac 列（capwap 建立），再按 radio_mac 兜底
@@ -751,7 +788,8 @@ def update_wireless_from_msg(msg: mdt_pb2.Telemetry, device_id) -> int:
                     # capwap-data 订阅（17.9 实测，含 AP 资产信息）
                     ("device-detail.static-info.ap-models.model", "model", str),
                     (
-                        "device-detail.static-info.board-data.wtp-serial-number",
+                        # 实测真实键名是 wtp-serial-num（不是 -number）
+                        "device-detail.static-info.board-data.wtp-serial-num",
                         "serial_number",
                         str,
                     ),
@@ -795,7 +833,18 @@ def update_wireless_from_msg(msg: mdt_pb2.Telemetry, device_id) -> int:
                     "rrm-measurement" in path
                     or "radio-oper-data" in path
                     or "curr-freq" in leaves
+                    or "noise.noise.noise-data.chan" in leaves
                 )
+                # AP 客户端数：rrm-measurement 的 load.stations
+                # （该 radio 关联的客户端数）——按 slot 累加到 AP 行
+                if is_radio_entry:
+                    st = _to_float_safe(leaves.get("load.stations"))
+                    if st is not None:
+                        # 同批内多 slot 条目累加（slot0+slot1）
+                        ap_client_counts[ap_row.name] = (
+                            ap_client_counts.get(ap_row.name, 0) + int(st)
+                        )
+                        ap_row.client_count = ap_client_counts[ap_row.name]
                 if is_radio_entry:
                     # rrm-measurement 的 chan 或 radio-oper-data 的
                     # curr-freq 都代表当前信道

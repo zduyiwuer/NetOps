@@ -306,8 +306,11 @@ def store_telemetry_samples(
                 deduped_strings.append(s)
         # 不限额：全部推送数据入库（遥测样本保留 24 小时，
         # 由调度清理任务滚动删除，避免无限增长）
-        audit_samples = samples[:20000]
-        for s in audit_samples:
+        # 全量入库，不设上限；分批 commit（每 500 条）——
+        # 单条大消息几千条样本一个事务会把 SQLite 写锁占满，
+        # 其他写入方（无线合并等）超时 database is locked
+        audit_samples = samples
+        for i, s in enumerate(audit_samples):
             num = _to_float(s.value)
             db.add(
                 TelemetrySampleModel(
@@ -321,6 +324,8 @@ def store_telemetry_samples(
                     source=source,
                 )
             )
+            if (i + 1) % 500 == 0:
+                db.commit()
 
         db.commit()
 

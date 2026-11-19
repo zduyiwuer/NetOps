@@ -32,7 +32,7 @@ if settings.database_url.startswith("sqlite"):
         cur.execute("PRAGMA synchronous=NORMAL")
         cur.execute("PRAGMA foreign_keys=ON")
         # 写锁等待：多进程/多线程并发写入时避免立即报 database is locked
-        cur.execute("PRAGMA busy_timeout=15000")
+        cur.execute("PRAGMA busy_timeout=30000")
         cur.close()
 
 

@@ -483,6 +483,8 @@ class WirelessAP(Base):
     # AP 基 MAC（wtp-mac，capwap-data 遥测推送）——radio_mac 是
     # BSSID 段与 wtp-mac 不同源，关联 rrm / radio 数据要靠此列
     wtp_mac: Mapped[str] = mapped_column(String(32), default="")
+    # 该 AP 的关联客户端数（rrm-measurement 的 load.stations）
+    client_count: Mapped[int] = mapped_column(Integer, default=0)
     ts: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
 
 
