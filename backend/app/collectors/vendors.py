@@ -276,14 +276,15 @@ VENDORS: Dict[str, VendorProfile] = {
         # ASA 特有：当前连接数、并发连接峰值、CSC 表项数
         # CISCO-ASA-MIB 的正确层级是 ciscoASAConnStats(1.2).ciscoASAConnStatsTable(1)
         extra_oids={
-            "conn_count": ["1.3.6.1.4.1.9.9.166.1.2.1.1.0"],  # ciscoASAConnCount
-            "conn_peak": ["1.3.6.1.4.1.9.9.166.1.2.1.2.0"],  # ciscoASAConnPeak
+            # cfwConnectionStatValue（精确索引）：行 40.6 = "number of
+            # connections currently in use"、行 40.7 = "highest number
+            # of connections in use"（实测 5516；ciscoASAConnCount
+            # 在该设备 No Such Object）
+            "conn_count": ["1.3.6.1.4.1.9.9.147.1.2.2.2.1.5.40.6",
+                         "1.3.6.1.4.1.9.9.166.1.2.1.1.0"],
+            "conn_peak": ["1.3.6.1.4.1.9.9.147.1.2.2.2.1.5.40.7",
+                         "1.3.6.1.4.1.9.9.166.1.2.1.2.0"],
             "csc_table_size": ["1.3.6.1.4.1.9.9.166.1.3.2.1.1.0"],  # ciscoASACscTableSize
-        },
-        # cfwConnectionStatTable（实测 5516 可用，列 5 = 当前连接数）；
-        # ciscoASAConnCount 在该设备 No Such Object
-        extra_walk_oids={
-            "conn_count": ["1.3.6.1.4.1.9.9.147.1.2.2.2.1.5"],
         },
         extra_ssh_cmds={
             "conn_count": ["show connection count"],
