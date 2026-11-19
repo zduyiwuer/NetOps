@@ -616,20 +616,39 @@ def update_wireless_from_msg(msg: mdt_pb2.Telemetry, device_id) -> int:
         return groups
 
     def _iter_entries(msg_root: mdt_pb2.TelemetryField):
-        # 模式 1：KV-GPB 的**列表条目编码**——keys + content 且
-        # content 之下无重复子容器（一条消息就是一个条目；
-        # fsbcwlc 的 location / 单客户端批实测）。
-        # 注意必须先于重复组判定：否则嵌套的单例容器
-        # （如 radio-measurements）会被当成组抢走。
-        names = [f.name for f in msg_root.fields]
-        if "keys" in names:
-            content = next(
-                (f for f in msg_root.fields if f.name == "content"), None
-            )
-            sub = [f.name for f in content.fields] if content is not None else []
-            if len(sub) == len(set(sub)):
-                yield msg_root
-                return
+        # 模式 1：KV-GPB 的**列表条目编码**——keys + content 对
+        # （一条消息可含多对，每对一个条目：sisf 一批 40 绑定、
+        # capwap 一批多台 AP、traffic-stats 一条一客户端）。
+        # 真实结构实证：root = [keys, content, keys, content...]。
+        # 主批（sub2/sub3）的 keys 为空——content 下才是重复组，
+        # 走模式 2。
+        fields_list = list(msg_root.fields)
+        keys_nodes = [f for f in fields_list if f.name == "keys"]
+        if keys_nodes and any(len(k.fields) > 0 for k in keys_nodes):
+            i = 0
+            while i < len(fields_list):
+                if fields_list[i].name == "keys":
+                    pk = fields_list[i]
+                    pc = (
+                        fields_list[i + 1]
+                        if i + 1 < len(fields_list)
+                        and fields_list[i + 1].name == "content"
+                        else None
+                    )
+                    # 合成条目：keys 与 content 的字段展开合并
+                    # （无前缀，mac-addr / wtp-name / ipv4-binding.*
+                    # 等键直接可用，无需剥离）
+                    entry = mdt_pb2.TelemetryField()
+                    for sub in pk.fields:
+                        entry.fields.add().CopyFrom(sub)
+                    if pc is not None:
+                        for sub in pc.fields:
+                            entry.fields.add().CopyFrom(sub)
+                    yield entry
+                    i += 2
+                else:
+                    i += 1
+            return
         # 模式 2：同批多条目（content 下同名兄弟重复，如
         # common-oper-data × N / ap-radio-neighbor × N）
         for group in _find_entry_groups(msg_root):
