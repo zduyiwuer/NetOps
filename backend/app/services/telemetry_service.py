@@ -304,9 +304,9 @@ def store_telemetry_samples(
             if s.metric not in seen_metrics:
                 seen_metrics.add(s.metric)
                 deduped_strings.append(s)
-        audit_samples = (
-            numeric_samples[:200] + list(reversed(deduped_strings))[:100]
-        )
+        # 不限额：全部推送数据入库（遥测样本保留 24 小时，
+        # 由调度清理任务滚动删除，避免无限增长）
+        audit_samples = samples[:20000]
         for s in audit_samples:
             num = _to_float(s.value)
             db.add(

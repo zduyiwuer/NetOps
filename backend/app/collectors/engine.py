@@ -270,6 +270,26 @@ class Collector:
                 val = _pick(values, oids)
                 if val is not None:
                     sample.system.extra[name] = val
+            # 表形态的 extra 指标（walk 取所有实例的最大值——
+            # ASA 的 cfwConnectionStatTable 按 filter 协议多行，
+            # 总连接数是各行连接数的和 / 或最大实例）
+            for name, roots in self.vendor.extra_walk_oids.items():
+                for root in roots:
+                    try:
+                        wr = await client.walk(root)
+                    except Exception:
+                        continue
+                    if not wr.ok or not wr.values:
+                        continue
+                    nums = [_as_int(v) for v in wr.values.values()]
+                    nums = [n for n in nums if n is not None and n > 0]
+                    if nums:
+                        # 取最大实例（主 filter 的连接数）；
+                        # GET 的 extra 已有值时只在更大时覆盖
+                        big = max(nums)
+                        if big > (sample.system.extra.get(name) or 0):
+                            sample.system.extra[name] = big
+                        break
 
         # 2) 接口表（GET 优先，超阈值改用 BULK）
         if collect_interface:

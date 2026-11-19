@@ -82,6 +82,8 @@ class VendorProfile:
     temperature_oids: List[str] = field(default_factory=list)
     # 厂商特有指标：指标名 → OID 候补列表
     extra_oids: Dict[str, List[str]] = field(default_factory=dict)
+    # 表 OID 的 extra 指标（walk 后取最大值，如 ASA 的连接表）
+    extra_walk_oids: Dict[str, List[str]] = field(default_factory=dict)
     # 厂商特有指标的 SSH 采集命令：指标名 → 命令列表
     extra_ssh_cmds: Dict[str, List[str]] = field(default_factory=dict)
     cpu_ssh_cmd: List[str] = field(default_factory=list)
@@ -277,6 +279,11 @@ VENDORS: Dict[str, VendorProfile] = {
             "conn_count": ["1.3.6.1.4.1.9.9.166.1.2.1.1.0"],  # ciscoASAConnCount
             "conn_peak": ["1.3.6.1.4.1.9.9.166.1.2.1.2.0"],  # ciscoASAConnPeak
             "csc_table_size": ["1.3.6.1.4.1.9.9.166.1.3.2.1.1.0"],  # ciscoASACscTableSize
+        },
+        # cfwConnectionStatTable（实测 5516 可用，列 5 = 当前连接数）；
+        # ciscoASAConnCount 在该设备 No Such Object
+        extra_walk_oids={
+            "conn_count": ["1.3.6.1.4.1.9.9.147.1.2.2.2.1.5"],
         },
         extra_ssh_cmds={
             "conn_count": ["show connection count"],

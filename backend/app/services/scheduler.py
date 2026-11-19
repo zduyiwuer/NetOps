@@ -469,7 +469,35 @@ def _wrap_job(spec: Dict[str, Any]):
 # ---------------------------------------------------------------- 任务注册表
 # 每个后台任务在此登记：默认调度、分类、说明与执行函数。
 # 调度策略（cron / 间隔 / 启停）可在 Web 界面调整，配置持久化在 scheduled_jobs 表。
+async def _job_cleanup_telemetry_samples() -> None:
+    """遥测样本滚动清理：全量入库后数据量大，保留 24 小时。"""
+    from app.models.models import TelemetrySample
+    db = SessionLocal()
+    try:
+        cutoff = datetime.now() - timedelta(hours=24)
+        db.query(TelemetrySample).filter(
+            TelemetrySample.ts < cutoff
+        ).delete(synchronize_session=False)
+        db.commit()
+        logger.info("遥测样本清理完成（保留 24 小时）")
+    except Exception as exc:
+        db.rollback()
+        logger.warning("遥测样本清理失败: %s", exc)
+    finally:
+        db.close()
+
+
 JOB_REGISTRY: List[Dict[str, Any]] = [
+    {
+        "job_id": "cleanup_telemetry_samples",
+        "name": "遥测样本清理",
+        "description": "删除 24 小时前的遥测样本（全量入库后滚动清理）",
+        "category": "维护",
+        "func": _job_cleanup_telemetry_samples,
+        "default_interval": 3600,
+        "default_cron": "",
+        "misfire_grace_time": 300,
+    },
     {
         "job_id": "collect_all",
         "name": "设备指标采集",
