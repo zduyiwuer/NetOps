@@ -852,6 +852,7 @@ def update_wireless_from_msg(msg: mdt_pb2.Telemetry, device_id) -> int:
                     "rrm-measurement" in path
                     or "radio-oper-data" in path
                     or "curr-freq" in leaves
+                    or "phy-ht-cfg.cfg-data.curr-freq" in leaves
                     or "noise.noise.noise-data.chan" in leaves
                 )
                 # AP 客户端数：rrm-measurement 的 load.stations
@@ -868,40 +869,46 @@ def update_wireless_from_msg(msg: mdt_pb2.Telemetry, device_id) -> int:
                     # rrm-measurement 的 chan 或 radio-oper-data 的
                     # curr-freq 都代表当前信道
                     rrm_chan = _to_float_safe(
-                        leaves.get("noise.noise.noise-data.chan")
-                        if "noise.noise.noise-data.chan" in leaves
-                        else (
-                            leaves.get("chan")
-                            if "chan" in leaves
-                            else leaves.get("curr-freq")
-                        )
+                        leaves.get("phy-ht-cfg.cfg-data.curr-freq")
+                        if "phy-ht-cfg.cfg-data.curr-freq" in leaves
+                        else leaves.get("curr-freq")
                     )
                     rrm_slot = _to_float_safe(leaves.get("radio-slot-id"))
                     logger.debug(
                         "MDT rrm 填客户端: ap=%s slot=%s chan=%s",
                         ap_row.name[:20], rrm_slot, rrm_chan,
                     )
-                    if rrm_chan is not None and rrm_chan > 0:
-                        affected = (
-                            db.query(WirelessClient)
-                            .filter(
-                                WirelessClient.device_id == device_id,
-                                WirelessClient.ap_name == ap_row.name,
-                            )
-                            .all()
+                    # 信道与噪底分开判断：rrm 条目（只有噪底，
+                    # 没有 curr-freq）也应把噪底刷给客户端
+                    affected = (
+                        db.query(WirelessClient)
+                        .filter(
+                            WirelessClient.device_id == device_id,
+                            WirelessClient.ap_name == ap_row.name,
                         )
-                        # 保留 debug 级填充日志（下次排查 radio 条目用）
+                        .all()
+                    )
+                    if affected and (
+                        (rrm_chan is not None and rrm_chan > 0)
+                        or (nv is not None and -130 < nv < 0)
+                    ):
                         for cl in affected:
                             cl_slot = _to_float_safe(cl.slot) or 0
                             if rrm_slot is None or int(cl_slot) == int(rrm_slot):
-                                if cl.channel != int(rrm_chan):
-                                    cl.channel = int(rrm_chan)
-                                if cl.noise_floor != int(nv if nv else 0):
-                                    cl.noise_floor = int(nv) if nv else None
+                                if rrm_chan is not None and rrm_chan > 0:
+                                    if cl.channel != int(rrm_chan):
+                                        cl.channel = int(rrm_chan)
+                                if nv is not None and -130 < nv < 0:
+                                    if cl.noise_floor != int(nv):
+                                        cl.noise_floor = int(nv)
                         db.commit()
                 # radio-oper-data 订阅：curr-freq 是当前信道，
                 # radio-slot-id 组装 channels（如 "slot0: 11 / slot1: 52"）
-                freq = _to_float_safe(leaves.get("curr-freq"))
+                freq = _to_float_safe(
+                    leaves.get("phy-ht-cfg.cfg-data.curr-freq")
+                    if "phy-ht-cfg.cfg-data.curr-freq" in leaves
+                    else leaves.get("curr-freq")
+                )
                 slot = _to_float_safe(leaves.get("radio-slot-id"))
                 if freq is not None and freq > 0:
                     seg = f"slot{int(slot) if slot is not None else 0}: {int(freq)}"

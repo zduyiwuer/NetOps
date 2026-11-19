@@ -406,16 +406,6 @@
               </span>
             </template>
           </el-table-column>
-          <el-table-column prop="client_count" label="客户端数" width="80" align="center">
-            <template #default="{ row }">
-              <span class="mono">{{ row.client_count || 0 }}</span>
-            </template>
-          </el-table-column>
-          <el-table-column prop="client_count" label="客户端数" width="80" align="center">
-            <template #default="{ row }">
-              <span class="mono">{{ row.client_count || 0 }}</span>
-            </template>
-          </el-table-column>
           <el-table-column prop="state" label="状态" width="110" align="center" show-overflow-tooltip>
             <template #default="{ row }">
               <el-tag size="small" effect="plain" :type="row.state === 'Run' ? 'success' : 'info'">
