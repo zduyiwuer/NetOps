@@ -478,6 +478,11 @@ class WirelessAP(Base):
     source: Mapped[str] = mapped_column(String(16), default="snmp")
     # 噪底（dBm）——由 rrm-oper 遥测推送填充
     noise_floor: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # AP 软件版本（如 17.9.4.27，capwap-data 遥测推送）
+    sw_version: Mapped[str] = mapped_column(String(32), default="")
+    # AP 基 MAC（wtp-mac，capwap-data 遥测推送）——radio_mac 是
+    # BSSID 段与 wtp-mac 不同源，关联 rrm / radio 数据要靠此列
+    wtp_mac: Mapped[str] = mapped_column(String(32), default="")
     ts: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
 
 

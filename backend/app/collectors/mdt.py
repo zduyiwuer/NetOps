@@ -77,6 +77,16 @@ def parse_telemetry_msg(raw: bytes) -> Optional[mdt_pb2.Telemetry]:
         return None
 
 
+def _to_float_safe(v: Any) -> Optional[float]:
+    """宽松数值转换（traffic-stats 的 speed/rssi 等用）。"""
+    if v is None:
+        return None
+    try:
+        return float(v)
+    except (ValueError, TypeError):
+        return None
+
+
 def _norm_mac(v: Any) -> str:
     """MAC 统一为 xx:xx:xx:xx:xx:xx 小写格式。
 
@@ -619,7 +629,11 @@ def update_wireless_from_msg(msg: mdt_pb2.Telemetry, device_id) -> int:
         if is_ap:
             ap_name = None
             for k, v in leaves.items():
-                if k.endswith("ap-name") and isinstance(v, str) and v:
+                # capwap-data 的列表键是 wtp-name（AP 名字），
+                # ap-capability / cdp 条目用 ap-name
+                if (
+                    k.endswith("ap-name") or k.endswith("wtp-name")
+                ) and isinstance(v, str) and v:
                     ap_name = v
                     break
             if not ap_name:
@@ -660,17 +674,25 @@ def update_wireless_from_msg(msg: mdt_pb2.Telemetry, device_id) -> int:
                 .filter(WirelessAP.device_id == device_id)
                 .all()
             }
-            # radio_mac 索引（rrm 条目按 wtp-mac 关联用）
-            aps_by_mac = {
+            # wtp-mac（基 MAC）索引优先——capwap-data 推的
+            # wtp-mac 与 radio_mac（BSSID 段）不同源；
+            # 名字定位过的行已带 wtp_mac，rrm/radio 条目靠它关联
+            aps_by_wtp = {
+                _norm_mac(a.wtp_mac): a
+                for a in aps.values()
+                if a.wtp_mac
+            }
+            aps_by_radio = {
                 _norm_mac(a.radio_mac): a
                 for a in aps.values()
                 if a.radio_mac
             }
             for ap_name, leaves in ap_updates[:200]:
                 if ap_name.startswith("__mac__"):
-                    # rrm 条目：按 radio_mac 找已有 AP 行；找不到跳过
-                    # （噪底等 RF 数据挂到 AP 行上，不新建无名字的行）
-                    ap_row = aps_by_mac.get(ap_name[len("__mac__"):])
+                    # rrm / radio-oper 条目只有 wtp-mac——
+                    # 先按 wtp_mac 列（capwap 建立），再按 radio_mac 兜底
+                    wtp = ap_name[len("__mac__"):]
+                    ap_row = aps_by_wtp.get(wtp) or aps_by_radio.get(wtp)
                     if ap_row is None:
                         continue
                 else:
@@ -681,6 +703,26 @@ def update_wireless_from_msg(msg: mdt_pb2.Telemetry, device_id) -> int:
                         )
                         aps[ap_name] = ap_row
                         db.add(ap_row)
+                    # 记录真正的 wtp-mac 基 MAC（供 rrm / radio-oper
+                    # 条目按 __mac__ 关联）——两类权威条目才写：
+                    # - capwap-data：有 device-detail 字段
+                    # - ap-name-mac-map：有 eth-mac + wtp-mac（专门
+                    #   的名字↔MAC 映射表，93 样本/批）
+                    # ap-capability 条目的 wtp-mac 实测是 radio MAC
+                    # （BSSID 段），不能写
+                    is_capwap = any(
+                        k.startswith("device-detail") for k in leaves
+                    )
+                    is_name_mac_map = (
+                        "eth-mac" in leaves and "wtp-mac" in leaves
+                    )
+                    if is_capwap or is_name_mac_map:
+                        wm = (
+                            leaves.get("wtp-mac")
+                            or leaves.get("wtp-mac-addr")
+                        )
+                        if wm:
+                            ap_row.wtp_mac = _norm_mac(wm)
                 # 键名按常见 YANG 宽松匹配（设备版本差异容忍）
                 # 键名按 9800L 实测报文（16:15 批 dump）：
                 # mac-addr / wtp-mac-addr / cdp-cache-ap-address。
@@ -698,6 +740,16 @@ def update_wireless_from_msg(msg: mdt_pb2.Telemetry, device_id) -> int:
                     ("model-id", "model", str),
                     ("description", "location", str),
                     ("location", "location", str),
+                    # capwap-data 订阅（17.9 实测，含 AP 资产信息）
+                    ("device-detail.static-info.ap-models.model", "model", str),
+                    (
+                        "device-detail.static-info.board-data.wtp-serial-number",
+                        "serial_number",
+                        str,
+                    ),
+                    ("ap-location.location", "location", str),
+                    ("ap-state.ap-operation-state", "state", str),
+                    ("device-detail.wtp-version.sw-version", "sw_version", str),
                 ):
                     v = leaves.get(lk)
                     if v is None:
@@ -714,16 +766,29 @@ def update_wireless_from_msg(msg: mdt_pb2.Telemetry, device_id) -> int:
                         "MDT CDP 地址: ap=%s ip=%s",
                         ap_name[:20], str(leaves.get("cdp-cache-ap-address"))[:20],
                     )
-                # rrm 的噪底（noise-floor 键，dBm）——订阅数据里
-                # 有该字段时自动填充 AP 行
-                for nk in ("noise-floor", "oper-data.noise-floor"):
-                    v = leaves.get(nk)
-                    if v is not None:
-                        try:
-                            ap_row.noise_floor = int(v)
-                        except (ValueError, TypeError):
-                            pass
-                        break
+                # rrm-measurement 订阅（17.9 实测）：noise 键是噪底
+                # （dBm），chan 是信道——另有功率 / 利用率等
+                nv = _to_float_safe(leaves.get("noise"))
+                if nv is not None and -130 < nv < 0:
+                    if ap_row.noise_floor != int(nv):
+                        ap_row.noise_floor = int(nv)
+                # radio-oper-data 订阅：curr-freq 是当前信道，
+                # radio-slot-id 组装 channels（如 "slot0: 11 / slot1: 52"）
+                freq = _to_float_safe(leaves.get("curr-freq"))
+                slot = _to_float_safe(leaves.get("radio-slot-id"))
+                if freq is not None and freq > 0:
+                    seg = f"slot{int(slot) if slot is not None else 0}: {int(freq)}"
+                    cur = ap_row.channels or ""
+                    if seg not in cur:
+                        parts = cur.split(" / ") if cur else []
+                        parts = [
+                            p2
+                            for p2 in parts
+                            if not p2.startswith(seg.split(":")[0] + ":")
+                        ]
+                        parts.append(seg)
+                        parts.sort()
+                        ap_row.channels = " / ".join(parts)
                 ap_row.source = "telemetry"
                 ap_row.ts = now
                 touched += 1
@@ -786,6 +851,38 @@ def update_wireless_from_msg(msg: mdt_pb2.Telemetry, device_id) -> int:
                     # dot11-state 比 co-state 更详细）
                     if v != getattr(c, attr):
                         setattr(c, attr, v)
+                        changed = True
+                # traffic-stats 订阅（client-oper-data/traffic-stats，
+                # 17.9 实测）：speed 是协商速率（Mbps），
+                # most-recent-rssi / snr 是最新测量——不依赖 location
+                ts_speed = _to_float_safe(leaves.get("speed"))
+                if ts_speed is not None and ts_speed > 0:
+                    rate = f"{ts_speed:g}"
+                    if c.tx_rate != rate:
+                        c.tx_rate = rate
+                        c.rx_rate = rate
+                        changed = True
+                ts_rssi = _to_float_safe(leaves.get("most-recent-rssi"))
+                if ts_rssi is not None and -120 < ts_rssi < 0:
+                    if c.rssi != int(ts_rssi):
+                        c.rssi = int(ts_rssi)
+                        c.signal_strength = int(ts_rssi)
+                        changed = True
+                ts_snr = _to_float_safe(leaves.get("most-recent-snr"))
+                if ts_snr is not None and 0 < ts_snr < 100:
+                    if c.snr != int(ts_snr):
+                        c.snr = int(ts_snr)
+                        changed = True
+                # 收发流量 / 重传
+                for lk, attr in (
+                    ("bytes-rx", "bytes_in"),
+                    ("bytes-tx", "bytes_out"),
+                    ("pkts-rx", "packets_in"),
+                    ("pkts-tx", "packets_out"),
+                ):
+                    n = _to_float_safe(leaves.get(lk))
+                    if n is not None and getattr(c, attr) != int(n):
+                        setattr(c, attr, int(n))
                         changed = True
                 # 信道：客户端条目不含信道（由 AP radio 决定），
                 # wlan-id / vlan 类数值字段暂无展示列，忽略

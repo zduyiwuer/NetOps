@@ -82,13 +82,15 @@ async def _telemetry_liveness(device, db) -> Optional[DeviceSample]:
                     reachability=online,
                 )
             )
-        db.commit()
+        # 提交放线程池：同步 DB 提交直接跑在事件循环里会把
+        # HTTP 请求与其它任务一起卡住（锁竞争时要等 busy_timeout）
+        await asyncio.to_thread(db.commit)
         logger.debug(
             "设备 %s 纯遥测模式：%s",
             device.name, "在线（近 10 分钟有样本）" if online else "离线",
         )
     except Exception as exc:
-        db.rollback()
+        await asyncio.to_thread(db.rollback)
         logger.warning("遥测在线判定失败 device=%s: %s", device.id, exc)
     return None
 
@@ -161,7 +163,9 @@ async def collect_device(device_id: int) -> Optional[DeviceSample]:
                 db.add(row)
                 iface_rows.append(row)
 
-            db.commit()
+            # 提交放线程池：WLC / 核心交换机一轮几百条接口行，
+            # 同步提交跑在事件循环里会把 HTTP 请求卡住数十秒
+            await asyncio.to_thread(db.commit)
 
             # 告警评估
             try:
@@ -345,7 +349,35 @@ async def cleanup_old_data() -> int:
         l = db.query(DeviceLog).filter(DeviceLog.ts < log_cut).delete(synchronize_session=False)
         db.commit()
         logger.info("数据清理：指标 %s，接口 %s，日志 %s", m, i, l)
-        return m + i + l
+
+        # 遥测样本审计表：单独的（更短的）保留期。
+        # 该表随推送频率线性增长——不清理会在数周内到数百万行，
+        # 拖慢所有写入并触发 SQLite 锁竞争（database is locked）。
+        # 分批删除（每批 5 万行 + 立即提交）：一次删几百万行会
+        # 长时间占住写锁，把采集与遥测写入全部堵住。
+        tel_cut = datetime.now() - timedelta(days=settings.telemetry_retention_days)
+        from app.models.models import TelemetrySample
+
+        t_total = 0
+        while True:
+            stale_ids = (
+                db.query(TelemetrySample.id)
+                .filter(TelemetrySample.ts < tel_cut)
+                .limit(50000)
+                .subquery()
+            )
+            n = (
+                db.query(TelemetrySample)
+                .filter(TelemetrySample.id.in_(stale_ids))
+                .delete(synchronize_session=False)
+            )
+            db.commit()
+            t_total += n
+            if n < 50000:
+                break
+        if t_total:
+            logger.info("数据清理：遥测样本 %s（保留 %s 天）", t_total, settings.telemetry_retention_days)
+        return m + i + l + t_total
     except Exception as exc:
         logger.warning("数据清理失败: %s", exc)
         return 0
@@ -418,9 +450,16 @@ def _wrap_job(spec: Dict[str, Any]):
             result = func()
             if asyncio.iscoroutine(result):
                 await result
-            record_job_run(job_id, "success", int((time.perf_counter() - started) * 1000))
+            # 记录执行状态也是一次 DB 写——放线程池避免占用事件循环
+            await asyncio.to_thread(
+                record_job_run, job_id, "success",
+                int((time.perf_counter() - started) * 1000), "",
+            )
         except Exception as exc:
-            record_job_run(job_id, "failed", int((time.perf_counter() - started) * 1000), str(exc))
+            await asyncio.to_thread(
+                record_job_run, job_id, "failed",
+                int((time.perf_counter() - started) * 1000), str(exc),
+            )
             logger.exception("定时任务 %s 执行失败: %s", job_id, exc)
 
     _runner.__name__ = f"job_{job_id}"

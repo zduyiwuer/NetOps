@@ -55,6 +55,11 @@ class Settings(BaseSettings):
     telemetry_enabled: bool = True
     gnmi_listen_port: int = 57400
     telemetry_sample_interval_ms: int = 10000
+    # 遥测样本审计表（telemetry_samples）保留天数。
+    # 该表按推送频率线性增长（实测单台 WLC 日增约 50 万行），
+    # 不设保留期会在数周内膨胀到数百万行，拖慢 SQLite 写入并引发锁竞争。
+    # 样本明细仅用于排障（界面只展示最新几百条），1 天窗口已足够
+    telemetry_retention_days: int = 1
 
     # ---- 域控 / LDAP ----
     ldap_enabled: bool = False

@@ -294,6 +294,16 @@
           </el-table-column>
           <el-table-column prop="radio_mac" label="Radio MAC" width="135" class-name="mono" show-overflow-tooltip />
           <el-table-column prop="serial_number" label="序列号" width="130" class-name="mono" show-overflow-tooltip />
+          <el-table-column prop="sw_version" label="软件版本" width="95" align="center" show-overflow-tooltip>
+            <template #default="{ row }">
+              <span class="mono">{{ row.sw_version || '-' }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column prop="sw_version" label="软件版本" width="95" align="center" show-overflow-tooltip>
+            <template #default="{ row }">
+              <span class="mono">{{ row.sw_version || '-' }}</span>
+            </template>
+          </el-table-column>
           <el-table-column prop="location" label="位置" min-width="120" show-overflow-tooltip />
           <el-table-column label="状态" width="90" align="center">
             <template #default="{ row }">
@@ -421,56 +431,7 @@
         </el-table>
       </div>
 
-      <!-- 遥测数据（设备推送的原始样本，gNMI / Cisco MDT） -->
-      <div class="table-card" style="margin-top: 12px">
-        <div class="card-title">
-          <span>遥测数据</span>
-          <div class="iface-filter">
-            <el-select
-              v-model="telemetryPathFilter"
-              placeholder="全部订阅路径"
-              clearable
-              filterable
-              size="small"
-              style="width: 260px"
-              @change="loadTelemetrySamples"
-            >
-              <el-option v-for="p in telemetryPaths" :key="p" :label="p" :value="p" />
-            </el-select>
-            <el-button link size="small" type="primary" @click="$router.push('/telemetry')">
-              遥测分析 →
-            </el-button>
-          </div>
-        </div>
-        <el-table
-          border
-          v-loading="telemetryLoading"
-          :data="telemetrySamples"
-          size="small"
-          stripe
-          max-height="360"
-          empty-text="该设备暂无遥测样本（需设备通过 gNMI / MDT 推送）"
-        >
-          <el-table-column label="时间" width="160" class-name="mono">
-            <template #default="{ row }">{{ (row.ts || '').replace('T', ' ').slice(0, 19) }}</template>
-          </el-table-column>
-          <el-table-column prop="metric" label="指标（子项路径）" min-width="260" class-name="mono" show-overflow-tooltip />
-          <el-table-column label="值" min-width="130" show-overflow-tooltip>
-            <template #default="{ row }">
-              <span class="mono">{{ row.value_num ?? row.value_text }}</span>
-            </template>
-          </el-table-column>
-          <el-table-column prop="interface" label="条目（客户端/接口）" width="150" class-name="mono" show-overflow-tooltip />
-          <el-table-column prop="source" label="来源" width="80" align="center">
-            <template #default="{ row }">
-              <el-tag size="small" effect="plain" :type="row.source === 'push' ? 'success' : 'info'">
-                {{ row.source }}
-              </el-tag>
-            </template>
-          </el-table-column>
-        </el-table>
-      </div>
-
+      <!-- 漫游记录（无线专属） -->
       <div class="table-card" style="margin-top: 12px">
         <div class="card-title">
           <span>漫游记录</span>
@@ -531,6 +492,62 @@
         </el-table>
       </div>
     </template>
+
+    <!-- 遥测数据（设备推送的原始样本，gNMI / Cisco MDT）。
+         不再限定无线控制器——任何开启了遥测或收到过样本的设备都展示，
+         否则「遥测页有数据、设备详情看不到」 -->
+    <div
+      v-if="device.use_telemetry || telemetrySamples.length > 0"
+      class="table-card"
+      style="margin-top: 12px"
+    >
+      <div class="card-title">
+        <span>遥测数据</span>
+        <div class="iface-filter">
+          <el-select
+            v-model="telemetryPathFilter"
+            placeholder="全部订阅路径"
+            clearable
+            filterable
+            size="small"
+            style="width: 260px"
+            @change="loadTelemetrySamples"
+          >
+            <el-option v-for="p in telemetryPaths" :key="p" :label="p" :value="p" />
+          </el-select>
+          <el-button link size="small" type="primary" @click="$router.push('/telemetry')">
+            遥测分析 →
+          </el-button>
+        </div>
+      </div>
+      <el-table
+        border
+        v-loading="telemetryLoading"
+        :data="telemetrySamples"
+        size="small"
+        stripe
+        max-height="360"
+        empty-text="该设备暂无遥测样本（需设备通过 gNMI / MDT 推送）"
+      >
+        <el-table-column label="时间" width="160" class-name="mono">
+          <template #default="{ row }">{{ (row.ts || '').replace('T', ' ').slice(0, 19) }}</template>
+        </el-table-column>
+        <el-table-column prop="metric" label="指标（子项路径）" min-width="260" class-name="mono" show-overflow-tooltip />
+        <el-table-column label="值" min-width="130" show-overflow-tooltip>
+          <template #default="{ row }">
+            <span class="mono">{{ row.value_num ?? row.value_text }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="interface" label="条目（客户端/接口）" width="150" class-name="mono" show-overflow-tooltip />
+        <el-table-column prop="source" label="来源" width="80" align="center">
+          <template #default="{ row }">
+            <el-tag size="small" effect="plain" :type="row.source === 'push' ? 'success' : 'info'">
+              {{ row.source }}
+            </el-tag>
+          </template>
+        </el-table-column>
+      </el-table>
+    </div>
   </div>
 </template>
 
