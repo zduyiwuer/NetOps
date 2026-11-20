@@ -79,8 +79,16 @@ def main() -> int:
     db = SessionLocal()
     try:
         if wlc:
-            db.query(WirelessRoaming).filter(WirelessRoaming.device_id == wlc.id).delete()
-            db.commit()
+            # WAL 高并发下外部写可能 readonly——重试
+            for _try in range(3):
+                try:
+                    db.query(WirelessRoaming).filter(WirelessRoaming.device_id == wlc.id).delete()
+                    db.commit()
+                    break
+                except Exception:
+                    db.rollback()
+                    import time as _t
+                    _t.sleep(2)
             cli = (
                 db.query(WirelessClient)
                 .filter(WirelessClient.device_id == wlc.id, WirelessClient.bssid != "")

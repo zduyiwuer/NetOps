@@ -816,6 +816,8 @@ def update_wireless_from_msg(msg: mdt_pb2.Telemetry, device_id) -> int:
                     ("ap-state.ap-operation-state", "state", str),
                     ("device-detail.wtp-version.sw-version", "sw_version", str),
                 ):
+                    # 注：szho（17.03）的 capwap 没有 sw-version 字符串，
+                    # 只有 sw-ver.{version,release,maint,build} 数字分量
                     v = leaves.get(lk)
                     if v is None:
                         # 嵌套路径（如 oper-data.wtp-mac）
@@ -831,6 +833,19 @@ def update_wireless_from_msg(msg: mdt_pb2.Telemetry, device_id) -> int:
                         "MDT CDP 地址: ap=%s ip=%s",
                         ap_name[:20], str(leaves.get("cdp-cache-ap-address"))[:20],
                     )
+                # 软件版本组装：无 sw-version 字符串时从数字分量
+                # 组装（szho 17.03 实测：sw-ver.version=17 /
+                # release=3 / maint=3 / build=26 → "17.3.3.26"）
+                if not ap_row.sw_version:
+                    _wv = {
+                        p: leaves.get(f"device-detail.wtp-version.sw-ver.{p}")
+                        for p in ("version", "release", "maint", "build")
+                    }
+                    if all(v is not None for v in _wv.values()):
+                        ap_row.sw_version = ".".join(
+                            str(int(float(v))) for v in _wv.values()
+                        )
+
                 # rrm-measurement 订阅：噪底 / 信道键有两种形态——
                 # 扁平（noise / chan）与嵌套
                 # （noise.noise.noise-data.noise / *.chan，fsbcwlc

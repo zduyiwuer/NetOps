@@ -1,5 +1,6 @@
 """设备 / 门店 / 资产 API。"""
 from __future__ import annotations
+from sqlalchemy import func
 
 import asyncio
 from datetime import datetime, timedelta
@@ -627,6 +628,16 @@ def list_wireless_aps(
     device = db.get(Device, device_id)
     if device is None:
         raise HTTPException(status_code=404, detail="设备不存在")
+    # 实时统计各 AP 的客户端数（与客户端表一致）
+    client_counts = dict(
+        db.query(WirelessClient.ap_name, func.count(WirelessClient.id))
+        .filter(
+            WirelessClient.device_id == device_id,
+            WirelessClient.ap_name != "",
+        )
+        .group_by(WirelessClient.ap_name)
+        .all()
+    )
     q = db.query(WirelessAP).filter(WirelessAP.device_id == device_id)
     if keyword:
         like = f"%{keyword.strip()}%"
@@ -638,12 +649,6 @@ def list_wireless_aps(
     if state:
         q = q.filter(WirelessAP.state == state)
     rows = q.order_by(WirelessAP.name).all()
-    # 每个 AP 上的客户端数（按 BSSID 关联当前客户端快照）
-    client_counts: Dict[str, int] = {}
-    for c in db.query(WirelessClient).filter(
-        WirelessClient.device_id == device_id, WirelessClient.bssid != ""
-    ).all():
-        client_counts[c.bssid] = client_counts.get(c.bssid, 0) + 1
     return {
         "items": [
             {
@@ -657,10 +662,12 @@ def list_wireless_aps(
                 "status": r.status,
                 "state": r.state,
                 "channels": r.channels,
-                "client_count": client_counts.get(r.radio_mac, 0),
                 "noise_floor": r.noise_floor,
                 "sw_version": r.sw_version or "",
-                "client_count": r.client_count or 0,
+                # 客户端数实时统计（按 AP 名统计客户端表——不依赖
+                # 遥测 stations（szho 的 rrm 无此字段），且与客户端
+                # 表一致）
+                "client_count": client_counts.get(r.name, 0),
                 "source": r.source or "snmp",
                 "ts": r.ts.isoformat() if r.ts else "",
             }
